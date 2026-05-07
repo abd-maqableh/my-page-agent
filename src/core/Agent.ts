@@ -8,12 +8,14 @@ export class Agent {
   private readonly client: LLMClient
   private readonly pageController: PageController
   private readonly callbacks?: AgentConfig['callbacks']
+  private readonly confirmAction?: AgentConfig['confirmAction']
 
   constructor(config: AgentConfig) {
     this.maxSteps = config.maxSteps ?? 10
     this.client = createLLMClient(config)
     this.pageController = new PageController()
     this.callbacks = config.callbacks
+    this.confirmAction = config.confirmAction
   }
 
   async execute(task: string): Promise<AgentRunResult> {
@@ -42,6 +44,18 @@ export class Agent {
       }
 
       this.callbacks?.onStatus?.(`Step ${step}: executing ${action.action}`)
+
+      if (this.confirmAction) {
+        const allowed = await this.confirmAction(action)
+        if (!allowed) {
+          return {
+            status: 'error',
+            history,
+            message: `Action "${action.action}" was rejected by confirmAction.`,
+          }
+        }
+      }
+
       const result = await this.pageController.executeAction(action)
 
       const entry: AgentHistoryEntry = {

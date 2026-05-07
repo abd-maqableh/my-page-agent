@@ -23,7 +23,7 @@
           },
           "description": "In-page LLM-driven browser agent (framework-agnostic).",
           "js": {
-            "packageName": "@page-agent/core",
+            "packageName": "@abd-maqableh/page-agent",
             "packageExports": {
               ".": {
                 "types": "./dist/index.d.ts",
@@ -5098,7 +5098,32 @@
       },
       {
         "source": "page-agent-core",
-        "target": "npm:vitest",
+        "target": "npm:@nx/js",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:@nx/vite",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:@types/node",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:jsdom",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:nx",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:typescript",
         "type": "static"
       },
       {
@@ -5109,6 +5134,11 @@
       {
         "source": "page-agent-core",
         "target": "npm:vite-plugin-dts",
+        "type": "static"
+      },
+      {
+        "source": "page-agent-core",
+        "target": "npm:vitest",
         "type": "static"
       }
     ],

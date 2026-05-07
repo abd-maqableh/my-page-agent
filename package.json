@@ -1,11 +1,21 @@
 {
-  "name": "@page-agent/core",
+  "name": "@abd-maqableh/page-agent",
   "version": "0.1.0",
   "description": "In-page LLM-driven browser agent (framework-agnostic).",
   "type": "module",
   "license": "UNLICENSED",
+  "author": "Abdallah Maqableh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/abd-maqableh/my-page-agent.git"
+  },
+  "homepage": "https://github.com/abd-maqableh/my-page-agent#readme",
+  "bugs": {
+    "url": "https://github.com/abd-maqableh/my-page-agent/issues"
+  },
   "publishConfig": {
-    "access": "restricted"
+    "access": "restricted",
+    "registry": "https://npm.pkg.github.com"
   },
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",

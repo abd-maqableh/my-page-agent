@@ -67,6 +67,13 @@ export interface OpenAIConfig {
   apiKey: string
   model: string
   temperature?: number
+  /**
+   * Opt-in flag to allow `baseURL` pointing directly at a public model provider
+   * (e.g. https://api.openai.com). DISABLED BY DEFAULT to prevent accidentally
+   * shipping raw API keys to the browser. Production deployments MUST route
+   * requests through a backend proxy you control.
+   */
+  allowDirectProvider?: boolean
 }
 
 export interface OllamaConfig {
@@ -81,6 +88,13 @@ export type LLMConfig = OpenAIConfig | OllamaConfig
 export interface AgentConfigBase {
   maxSteps?: number
   callbacks?: AgentCallbacks
+  /**
+   * Optional gate invoked before every action is executed. Return false (or a
+   * Promise resolving to false) to abort the run. Useful for blocking
+   * destructive actions (form submits, navigations, deletes) on production
+   * pages.
+   */
+  confirmAction?: (action: AgentAction) => boolean | Promise<boolean>
 }
 
 export type AgentConfig = LLMConfig & AgentConfigBase

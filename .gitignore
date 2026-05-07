@@ -12,6 +12,15 @@ dist
 dist-ssr
 *.local
 
+# Nx
+.nx/cache
+.nx/workspace-data
+
+# Secrets — never commit auth tokens or env files
+.env
+.env.*
+!.env.example
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

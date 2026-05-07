@@ -8,12 +8,20 @@
     "projectFileMap": {
       "page-agent-core": [
         {
-          "file": ".gitignore",
-          "hash": "13046175384202504187"
+          "file": ".github/workflows/ci.yml",
+          "hash": "9793068951715652389"
         },
         {
-          "file": ".npmrc.example",
-          "hash": "1694299208240180820"
+          "file": ".github/workflows/release.yml",
+          "hash": "13024329425274309018"
+        },
+        {
+          "file": ".gitignore",
+          "hash": "9896342203076588575"
+        },
+        {
+          "file": ".npmrc",
+          "hash": "16042563392949187319"
         },
         {
           "file": "PRODUCTION_CHECKLIST.md",
@@ -33,7 +41,19 @@
         },
         {
           "file": "package.json",
-          "hash": "16643826904333960912"
+          "hash": "1464611974730267425",
+          "deps": [
+            "npm:ollama",
+            "npm:@nx/js",
+            "npm:@nx/vite",
+            "npm:@types/node",
+            "npm:jsdom",
+            "npm:nx",
+            "npm:typescript",
+            "npm:vite",
+            "npm:vite-plugin-dts",
+            "npm:vitest"
+          ]
         },
         {
           "file": "project.json",
@@ -49,7 +69,7 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "6697115414062301659"
+          "hash": "10255109260662984116"
         },
         {
           "file": "src/core/prompt.ts",
@@ -61,7 +81,7 @@
         },
         {
           "file": "src/core/types.ts",
-          "hash": "5988885131809144328"
+          "hash": "11373764188114841366"
         },
         {
           "file": "src/index.ts",
@@ -76,7 +96,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "1638438399989774055"
+          "hash": "13874386506946426054"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -104,7 +124,7 @@
         },
         {
           "file": "src/test/openai-client.test.ts",
-          "hash": "13232153455094889498",
+          "hash": "10288479596241078948",
           "deps": [
             "npm:vitest"
           ]

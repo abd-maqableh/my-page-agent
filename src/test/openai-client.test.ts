@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { OllamaClient } from '../llm/OllamaClient'
-import { parseAgentActionResponse } from '../llm/OpenAIClient'
+import { OpenAIClient, parseAgentActionResponse } from '../llm/OpenAIClient'
 
 const originalFetch = globalThis.fetch
 
@@ -24,6 +24,42 @@ describe('parseAgentActionResponse', () => {
 
   it('throws on invalid action', () => {
     expect(() => parseAgentActionResponse('{"action":"hack"}')).toThrow('Invalid action')
+  })
+})
+
+describe('OpenAIClient security guard', () => {
+  it('refuses to talk directly to api.openai.com without opt-in', () => {
+    expect(
+      () =>
+        new OpenAIClient({
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'sk-leak',
+          model: 'gpt-4o-mini',
+        }),
+    ).toThrow(/refusing to send the API key directly/)
+  })
+
+  it('allows direct provider when explicitly opted in', () => {
+    expect(
+      () =>
+        new OpenAIClient({
+          baseURL: 'https://api.openai.com/v1',
+          apiKey: 'sk-leak',
+          model: 'gpt-4o-mini',
+          allowDirectProvider: true,
+        }),
+    ).not.toThrow()
+  })
+
+  it('allows custom proxy URLs by default', () => {
+    expect(
+      () =>
+        new OpenAIClient({
+          baseURL: 'https://proxy.example.com/v1',
+          apiKey: 'proxy-token',
+          model: 'gpt-4o-mini',
+        }),
+    ).not.toThrow()
   })
 })
 

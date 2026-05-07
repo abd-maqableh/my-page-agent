@@ -43,10 +43,39 @@ export function parseAgentActionResponse(raw: string): AgentAction {
   return normalizeAction(payload)
 }
 
+const DIRECT_PROVIDER_HOSTS = [
+  'api.openai.com',
+  'api.anthropic.com',
+  'generativelanguage.googleapis.com',
+  'api.mistral.ai',
+  'api.cohere.ai',
+  'api.cohere.com',
+  'api.groq.com',
+  'api.together.xyz',
+]
+
+function assertSafeBaseURL(baseURL: string, allowDirectProvider: boolean | undefined): void {
+  let host: string
+  try {
+    host = new URL(baseURL).hostname.toLowerCase()
+  } catch {
+    throw new Error(`OpenAIClient: invalid baseURL "${baseURL}"`)
+  }
+
+  if (!allowDirectProvider && DIRECT_PROVIDER_HOSTS.some((h) => host === h || host.endsWith(`.${h}`))) {
+    throw new Error(
+      `OpenAIClient: refusing to send the API key directly to "${host}" from the browser. ` +
+        'Route requests through a backend proxy you control, or pass `allowDirectProvider: true` ' +
+        'to acknowledge the risk (NOT recommended for production).',
+    )
+  }
+}
+
 export class OpenAIClient implements LLMClient {
   private readonly config: OpenAIConfig
 
   constructor(config: OpenAIConfig) {
+    assertSafeBaseURL(config.baseURL, config.allowDirectProvider)
     this.config = config
   }
 
