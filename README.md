@@ -1,6 +1,6 @@
 # my-page-agent
 
-An initial MVP of a **Page Agent–style** TypeScript library that runs in the browser, observes interactive DOM elements, asks an OpenAI-compatible LLM what to do next, executes that action, and repeats until done.
+An initial MVP of a **Page Agent–style** TypeScript library that runs in the browser, observes interactive DOM elements, asks an LLM what to do next, executes that action, and repeats until done. It supports OpenAI-compatible chat completions APIs and local Ollama models.
 
 > This is an original MVP implementation for learning/prototyping.
 
@@ -8,7 +8,7 @@ An initial MVP of a **Page Agent–style** TypeScript library that runs in the b
 
 - Scans the current page for interactive elements (buttons, links, inputs, textareas, selects, ARIA roles, clickable/tabbable elements)
 - Builds a text observation with stable numeric indexes for the current step
-- Sends task + page observation + history to an OpenAI-compatible chat completions API
+- Sends task + page observation + history to an OpenAI-compatible chat completions API or Ollama
 - Expects JSON action output from the LLM
 - Executes DOM actions and loops
 - Includes a minimal floating panel UI and demo page
@@ -23,6 +23,7 @@ An initial MVP of a **Page Agent–style** TypeScript library that runs in the b
 - `src/page-controller/domScanner.ts` — DOM scanning + indexed text rendering
 - `src/page-controller/actions.ts` — DOM action implementations
 - `src/llm/OpenAIClient.ts` — OpenAI-compatible `fetch` client + JSON parsing
+- `src/llm/OllamaClient.ts` — Ollama package integration for local models
 - `src/ui/Panel.ts` — floating UI panel
 - `src/index.ts` — public API exports
 - `src/main.ts` — demo entry point
@@ -62,13 +63,42 @@ await agent.execute('Fill the form and submit it')
 mountAgentPanel({ baseURL, apiKey, model })
 ```
 
+### Ollama example
+
+Run Ollama locally, pull any chat model you want to use, then point the agent at it:
+
+```bash
+ollama pull llama3.2
+```
+
+```ts
+import { MyPageAgent, mountAgentPanel } from 'my-page-agent'
+
+const agent = new MyPageAgent({
+  provider: 'ollama',
+  baseURL: 'http://localhost:11434',
+  model: 'llama3.2',
+  maxSteps: 8,
+})
+
+await agent.execute('Fill the form and submit it')
+
+mountAgentPanel({
+  provider: 'ollama',
+  baseURL: 'http://localhost:11434',
+  model: 'llama3.2',
+})
+```
+
 ## Configuration
 
 `MyPageAgent` accepts:
 
-- `baseURL: string` — OpenAI-compatible API base URL
-- `apiKey: string` — API key used in `Authorization: Bearer ...`
-- `model: string` — chat model name
+- `provider?: "openai"` — OpenAI-compatible chat completions API (default)
+- `provider: "ollama"` — Ollama package integration
+- `baseURL: string` — OpenAI-compatible API base URL, or Ollama host when `provider` is `"ollama"`
+- `apiKey: string` — API key used in `Authorization: Bearer ...` for OpenAI-compatible APIs
+- `model: string` — chat model name, including any locally installed Ollama model
 - `temperature?: number`
 - `maxSteps?: number` (default `10`)
 - `callbacks?: { onStatus?, onStep? }`

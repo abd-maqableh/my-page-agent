@@ -55,17 +55,35 @@ export interface AgentRunResult {
   message: string
 }
 
+export type LLMProvider = 'openai' | 'ollama'
+
+export interface LLMClient {
+  getNextAction(messages: ChatMessage[]): Promise<AgentAction>
+}
+
 export interface OpenAIConfig {
+  provider?: 'openai'
   baseURL: string
   apiKey: string
   model: string
   temperature?: number
 }
 
-export interface AgentConfig extends OpenAIConfig {
+export interface OllamaConfig {
+  provider: 'ollama'
+  baseURL?: string
+  model: string
+  temperature?: number
+}
+
+export type LLMConfig = OpenAIConfig | OllamaConfig
+
+export interface AgentConfigBase {
   maxSteps?: number
   callbacks?: AgentCallbacks
 }
+
+export type AgentConfig = LLMConfig & AgentConfigBase
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant'
