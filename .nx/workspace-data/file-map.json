@@ -1,0 +1,154 @@
+{
+  "version": "6.0",
+  "nxVersion": "20.3.0",
+  "pathMappings": {},
+  "nxJsonPlugins": [],
+  "fileMap": {
+    "nonProjectFiles": [],
+    "projectFileMap": {
+      "page-agent-core": [
+        {
+          "file": ".gitignore",
+          "hash": "13046175384202504187"
+        },
+        {
+          "file": ".npmrc.example",
+          "hash": "1694299208240180820"
+        },
+        {
+          "file": "PRODUCTION_CHECKLIST.md",
+          "hash": "11508319575045406623"
+        },
+        {
+          "file": "README.md",
+          "hash": "17830428358792695958"
+        },
+        {
+          "file": "index.html",
+          "hash": "5500999209420211639"
+        },
+        {
+          "file": "nx.json",
+          "hash": "16177049214334501670"
+        },
+        {
+          "file": "package.json",
+          "hash": "16643826904333960912"
+        },
+        {
+          "file": "project.json",
+          "hash": "10108278215652918782"
+        },
+        {
+          "file": "public/favicon.svg",
+          "hash": "9681363740239943431"
+        },
+        {
+          "file": "public/icons.svg",
+          "hash": "12690649164411559435"
+        },
+        {
+          "file": "src/core/Agent.ts",
+          "hash": "6697115414062301659"
+        },
+        {
+          "file": "src/core/prompt.ts",
+          "hash": "1251310801627928602"
+        },
+        {
+          "file": "src/core/tools.ts",
+          "hash": "12088479907037156801"
+        },
+        {
+          "file": "src/core/types.ts",
+          "hash": "5988885131809144328"
+        },
+        {
+          "file": "src/index.ts",
+          "hash": "3005942672513944194"
+        },
+        {
+          "file": "src/llm/OllamaClient.ts",
+          "hash": "14438345912311814583",
+          "deps": [
+            "npm:ollama"
+          ]
+        },
+        {
+          "file": "src/llm/OpenAIClient.ts",
+          "hash": "1638438399989774055"
+        },
+        {
+          "file": "src/llm/createLLMClient.ts",
+          "hash": "12578432111627518568"
+        },
+        {
+          "file": "src/main.ts",
+          "hash": "69516181900537720"
+        },
+        {
+          "file": "src/page-controller/PageController.ts",
+          "hash": "539588193992635534"
+        },
+        {
+          "file": "src/page-controller/actions.ts",
+          "hash": "14970693274609233360"
+        },
+        {
+          "file": "src/page-controller/domScanner.ts",
+          "hash": "441083585528633579"
+        },
+        {
+          "file": "src/style.css",
+          "hash": "15270870770049546504"
+        },
+        {
+          "file": "src/test/openai-client.test.ts",
+          "hash": "13232153455094889498",
+          "deps": [
+            "npm:vitest"
+          ]
+        },
+        {
+          "file": "src/ui/Panel.ts",
+          "hash": "14197721366034977711"
+        },
+        {
+          "file": "tsconfig.base.json",
+          "hash": "2989873150160898660"
+        },
+        {
+          "file": "tsconfig.json",
+          "hash": "6497862748353014590"
+        },
+        {
+          "file": "tsconfig.lib.json",
+          "hash": "144550436377774759"
+        },
+        {
+          "file": "vite-env.d.ts",
+          "hash": "12946363841406869089"
+        },
+        {
+          "file": "vite.config.ts",
+          "hash": "1441722860861080856",
+          "deps": [
+            "npm:vite",
+            "npm:vite-plugin-dts"
+          ]
+        },
+        {
+          "file": "vite.demo.config.ts",
+          "hash": "14353647098812900110",
+          "deps": [
+            "npm:vite"
+          ]
+        },
+        {
+          "file": "yarn.lock",
+          "hash": "11325908535697209469"
+        }
+      ]
+    }
+  }
+}

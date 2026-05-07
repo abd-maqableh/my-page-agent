@@ -1,0 +1,8 @@
+# Copy to .npmrc and replace with your private registry URL.
+# Examples:
+#   GitHub Packages: https://npm.pkg.github.com
+#   Verdaccio:       https://npm.your-company.internal
+#   Artifactory:     https://your-org.jfrog.io/artifactory/api/npm/your-repo/
+@page-agent:registry=https://your-private-registry.example.com
+//your-private-registry.example.com/:_authToken=${NPM_TOKEN}
+always-auth=true

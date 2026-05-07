@@ -1,22 +1,56 @@
 {
-  "name": "my-page-agent",
-  "private": true,
-  "version": "0.0.0",
+  "name": "@page-agent/core",
+  "version": "0.1.0",
+  "description": "In-page LLM-driven browser agent (framework-agnostic).",
   "type": "module",
+  "license": "UNLICENSED",
+  "publishConfig": {
+    "access": "restricted"
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": false,
   "scripts": {
-    "dev": "vite",
-    "build": "npm run typecheck && vite build",
-    "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "lint": "npm run typecheck",
-    "test": "vitest run"
+    "dev": "vite --config vite.demo.config.ts",
+    "build": "nx build",
+    "test": "nx test",
+    "lint": "nx lint",
+    "typecheck": "nx typecheck",
+    "preview": "vite preview --config vite.demo.config.ts",
+    "release": "nx release",
+    "release:dry": "nx release --dry-run"
+  },
+  "peerDependencies": {
+    "ollama": "^0.6.3"
+  },
+  "peerDependenciesMeta": {
+    "ollama": {
+      "optional": true
+    }
   },
   "devDependencies": {
-    "typescript": "~6.0.2",
-    "vite": "^8.0.10",
-    "vitest": "^4.1.5"
-  },
-  "dependencies": {
-    "ollama": "^0.6.3"
+    "@nx/js": "20.3.0",
+    "@nx/vite": "20.3.0",
+    "@types/node": "^22.10.0",
+    "jsdom": "^25.0.1",
+    "nx": "20.3.0",
+    "ollama": "^0.6.3",
+    "typescript": "~5.7.2",
+    "vite": "^6.0.3",
+    "vite-plugin-dts": "^4.3.0",
+    "vitest": "^2.1.8"
   }
 }

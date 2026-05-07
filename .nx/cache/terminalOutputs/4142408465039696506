@@ -1,0 +1,26 @@
+[2m> [22mvitest run
+
+
+[1m[7m[36m RUN [39m[27m[22m [36mv2.1.9 [39m[90m/Users/amaqableh/Desktop/my-page-agent[39m
+
+[?25l [32m✓[39m [2msrc/test/[22mopenai-client[2m.test.ts[22m[2m (4)[22m
+   [32m✓[39m parseAgentActionResponse[2m (3)[22m
+     [32m✓[39m parses plain JSON
+     [32m✓[39m parses fenced JSON
+     [32m✓[39m throws on invalid action
+   [32m✓[39m OllamaClient[2m (1)[22m
+     [32m✓[39m requests a JSON chat action through Ollama
+[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[1A[2K[G [32m✓[39m [2msrc/test/[22mopenai-client[2m.test.ts[22m[2m (4)[22m
+   [32m✓[39m parseAgentActionResponse[2m (3)[22m
+     [32m✓[39m parses plain JSON
+     [32m✓[39m parses fenced JSON
+     [32m✓[39m throws on invalid action
+   [32m✓[39m OllamaClient[2m (1)[22m
+     [32m✓[39m requests a JSON chat action through Ollama
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m4 passed[39m[22m[90m (4)[39m
+[2m   Start at [22m 15:01:10
+[2m   Duration [22m 531ms[2m (transform 31ms, setup 0ms, collect 27ms, tests 6ms, environment 235ms, prepare 69ms)[22m
+
+[?25h[?25h

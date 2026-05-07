@@ -1,0 +1,22 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true,
+    "noEmit": false,
+    "types": ["node"]
+  },
+  "include": ["src/index.ts", "src/core/**/*.ts", "src/llm/**/*.ts", "src/page-controller/**/*.ts", "src/ui/**/*.ts"],
+  "exclude": [
+    "src/main.ts",
+    "src/test/**",
+    "src/**/__tests__/**",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts",
+    "vite.config.ts",
+    "vite.demo.config.ts",
+    "dist"
+  ]
+}
