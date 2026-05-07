@@ -1,17 +1,17 @@
-import { OpenAIClient } from '../llm/OpenAIClient'
+import { createLLMClient } from '../llm/createLLMClient'
 import { PageController } from '../page-controller/PageController'
 import { buildPrompt } from './prompt'
-import type { AgentConfig, AgentHistoryEntry, AgentRunResult } from './types'
+import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient } from './types'
 
 export class Agent {
   private readonly maxSteps: number
-  private readonly client: OpenAIClient
+  private readonly client: LLMClient
   private readonly pageController: PageController
   private readonly callbacks?: AgentConfig['callbacks']
 
   constructor(config: AgentConfig) {
     this.maxSteps = config.maxSteps ?? 10
-    this.client = new OpenAIClient(config)
+    this.client = createLLMClient(config)
     this.pageController = new PageController()
     this.callbacks = config.callbacks
   }

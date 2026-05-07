@@ -1,5 +1,5 @@
 import { normalizeAction } from '../core/tools'
-import type { AgentAction, ChatMessage, OpenAIConfig } from '../core/types'
+import type { AgentAction, ChatMessage, LLMClient, OpenAIConfig } from '../core/types'
 
 interface ChatCompletionsResponse {
   choices?: Array<{
@@ -43,7 +43,7 @@ export function parseAgentActionResponse(raw: string): AgentAction {
   return normalizeAction(payload)
 }
 
-export class OpenAIClient {
+export class OpenAIClient implements LLMClient {
   private readonly config: OpenAIConfig
 
   constructor(config: OpenAIConfig) {
