@@ -7,6 +7,8 @@ export interface PanelController {
 }
 
 export class Panel {
+  private static readonly MAX_LOG_ENTRIES = 8
+
   private readonly controller: PanelController
   private readonly root: HTMLDivElement
   private readonly taskInput: HTMLTextAreaElement
@@ -36,7 +38,7 @@ export class Panel {
       const item = document.createElement('li')
       item.textContent = line
       this.logEl.prepend(item)
-      while (this.logEl.children.length > 8) {
+      while (this.logEl.children.length > Panel.MAX_LOG_ENTRIES) {
         this.logEl.removeChild(this.logEl.lastElementChild as Node)
       }
     })

@@ -46,6 +46,9 @@ function getLabel(el: Element): string {
   }
 
   if (el instanceof HTMLSelectElement) {
+    if (!el.selectedOptions.length) {
+      return 'select element (no selection)'
+    }
     const selectedText = el.selectedOptions[0]?.textContent?.trim()
     if (selectedText) return selectedText
   }

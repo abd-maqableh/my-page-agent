@@ -1,12 +1,14 @@
 import type { AgentHistoryEntry, ChatMessage, PageObservation } from './types'
 
+const MAX_HISTORY_ENTRIES = 8
+
 function formatHistory(history: AgentHistoryEntry[]): string {
   if (!history.length) {
     return 'No prior actions.'
   }
 
   return history
-    .slice(-8)
+    .slice(-MAX_HISTORY_ENTRIES)
     .map((item) => {
       return [
         `Step ${item.step}`,

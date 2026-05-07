@@ -64,6 +64,7 @@ fakeLink?.addEventListener('click', (event) => {
 
 mountAgentPanel({
   baseURL: 'https://api.openai.com/v1',
+  // Demo only: do not expose real production API keys in browser code.
   apiKey: 'REPLACE_WITH_YOUR_KEY',
   model: 'gpt-4.1-mini',
   temperature: 0,
