@@ -14,19 +14,31 @@ interface ChatCompletionsResponse {
 
 function extractJSON(text: string): string {
   const trimmed = text.trim()
-  if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-    return trimmed
-  }
 
+  // Extract content from markdown code fences first
   const block = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  if (block?.[1]) {
-    return block[1]
-  }
+  const candidate = block?.[1]?.trim() ?? trimmed
 
-  const first = trimmed.indexOf('{')
-  const last = trimmed.lastIndexOf('}')
-  if (first !== -1 && last > first) {
-    return trimmed.slice(first, last + 1)
+  // Use balanced-bracket extraction to isolate the FIRST complete JSON object.
+  // This handles cases where the LLM appends extra text or a second JSON object
+  // after the response (which would cause JSON.parse to fail at position N).
+  const start = candidate.indexOf('{')
+  if (start !== -1) {
+    let depth = 0
+    let inString = false
+    let escaped = false
+    for (let i = start; i < candidate.length; i++) {
+      const ch = candidate[i]
+      if (escaped) { escaped = false; continue }
+      if (ch === '\\' && inString) { escaped = true; continue }
+      if (ch === '"') { inString = !inString; continue }
+      if (inString) continue
+      if (ch === '{') depth++
+      else if (ch === '}') {
+        depth--
+        if (depth === 0) return candidate.slice(start, i + 1)
+      }
+    }
   }
 
   throw new Error('LLM response did not include a JSON object.')

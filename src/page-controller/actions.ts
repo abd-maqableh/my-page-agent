@@ -126,8 +126,13 @@ async function doSelect(
   // Native <select>
   if (el.tagName.toLowerCase() === 'select') {
     const selectEl = el as HTMLSelectElement
+    const normalizedQuery = value.toLowerCase()
     const match = Array.from(selectEl.options).find((option) => {
-      return option.value.toLowerCase() === value.toLowerCase() || option.text.toLowerCase() === value.toLowerCase()
+      const optText = option.text.toLowerCase()
+      const optValue = option.value.toLowerCase()
+      return optText === normalizedQuery || optValue === normalizedQuery
+        || optText.includes(normalizedQuery) || normalizedQuery.includes(optText)
+        || optValue.includes(normalizedQuery) || normalizedQuery.includes(optValue)
     })
 
     if (!match) {
@@ -155,9 +160,10 @@ async function doSelect(
     }
 
     const options = Array.from(doc.querySelectorAll('[role="option"]'))
+    const normalizedValue = value.toLowerCase()
     const match = options.find((opt) => {
       const text = (opt.textContent ?? '').replace(/\s+/g, ' ').trim().toLowerCase()
-      return text === value.toLowerCase() || text.includes(value.toLowerCase())
+      return text === normalizedValue || text.includes(normalizedValue) || normalizedValue.includes(text)
     }) as HTMLElement | undefined
 
     if (!match) {

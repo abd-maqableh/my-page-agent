@@ -176,6 +176,10 @@
           "hash": "3693179293707062853"
         },
         {
+          "file": "ARCHITECTURE.md",
+          "hash": "6428018738316100095"
+        },
+        {
           "file": "PRODUCTION_CHECKLIST.md",
           "hash": "11508319575045406623"
         },
@@ -221,11 +225,11 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "386458535459607408"
+          "hash": "17869685525858569065"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "17791006964687851865"
+          "hash": "15421896384585969441"
         },
         {
           "file": "src/core/tools.ts",
@@ -248,7 +252,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "13874386506946426054"
+          "hash": "7884158200477778056"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -264,11 +268,11 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "12540265591037125461"
+          "hash": "7925544434658600878"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "14832337517657267922"
+          "hash": "17711890747989440953"
         },
         {
           "file": "src/style.css",
@@ -277,6 +281,13 @@
         {
           "file": "src/test/openai-client.test.ts",
           "hash": "10288479596241078948",
+          "deps": [
+            "npm:vitest"
+          ]
+        },
+        {
+          "file": "src/test/prompt.test.ts",
+          "hash": "9397614175325373497",
           "deps": [
             "npm:vitest"
           ]

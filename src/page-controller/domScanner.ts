@@ -16,6 +16,8 @@ const INTERACTIVE_SELECTOR = [
   '[role="link"]',
   '[role="textbox"]',
   '[role="combobox"]',
+  '[role="menuitem"]',
+  '[role="option"]',
   '[onclick]',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
@@ -60,6 +62,18 @@ function getLabel(el: Element): string {
   if (el.getAttribute('role') === 'combobox') {
     const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
     return `FILTER DROPDOWN: ${text || 'select option'}`
+  }
+
+  // Menuitem — label clearly so the model knows it is a clickable menu option
+  if (el.getAttribute('role') === 'menuitem') {
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+    return `MENU ITEM: ${text || 'menu option'}`
+  }
+
+  // Listbox option — label clearly
+  if (el.getAttribute('role') === 'option') {
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+    return `DROPDOWN OPTION: ${text || 'option'}`
   }
 
   const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
