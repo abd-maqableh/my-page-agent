@@ -9,13 +9,15 @@ export class Agent {
   private readonly pageController: PageController
   private readonly callbacks?: AgentConfig['callbacks']
   private readonly confirmAction?: AgentConfig['confirmAction']
+  private readonly pages?: AgentConfig['pages']
 
   constructor(config: AgentConfig) {
     this.maxSteps = config.maxSteps ?? 10
     this.client = createLLMClient(config)
-    this.pageController = new PageController()
+    this.pageController = new PageController(config.targetFrame)
     this.callbacks = config.callbacks
     this.confirmAction = config.confirmAction
+    this.pages = config.pages
   }
 
   async execute(task: string): Promise<AgentRunResult> {
@@ -30,7 +32,7 @@ export class Agent {
       const observation = this.pageController.observe()
 
       this.callbacks?.onStatus?.(`Step ${step}: asking model`)
-      const messages = buildPrompt(task, observation, history)
+      const messages = buildPrompt(task, observation, history, this.pages)
 
       let action
       try {
@@ -58,6 +60,10 @@ export class Agent {
 
       const result = await this.pageController.executeAction(action)
 
+      // Give the page time to settle (e.g. React portals, async renders) before next observe()
+      if (action.action === 'click' || action.action === 'input') {
+        await new Promise<void>((resolve) => setTimeout(resolve, 400))
+      }
       const entry: AgentHistoryEntry = {
         step,
         observation: observation.elementsText,

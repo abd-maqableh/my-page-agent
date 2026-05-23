@@ -31,3 +31,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+.nx/polygraph
+.claude/worktrees
+.claude/settings.local.json

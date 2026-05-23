@@ -8,6 +8,154 @@
     "projectFileMap": {
       "page-agent-core": [
         {
+          "file": ".agents/skills/link-workspace-packages/SKILL.md",
+          "hash": "6638592300654417978"
+        },
+        {
+          "file": ".agents/skills/monitor-ci/SKILL.md",
+          "hash": "8399173415832764241"
+        },
+        {
+          "file": ".agents/skills/monitor-ci/references/fix-flows.md",
+          "hash": "14499115380699629375"
+        },
+        {
+          "file": ".agents/skills/monitor-ci/scripts/ci-poll-decide.mjs",
+          "hash": "11489724214132048566"
+        },
+        {
+          "file": ".agents/skills/monitor-ci/scripts/ci-state-update.mjs",
+          "hash": "13401974159889364904"
+        },
+        {
+          "file": ".agents/skills/nx-generate/SKILL.md",
+          "hash": "12149253535688076771"
+        },
+        {
+          "file": ".agents/skills/nx-import/SKILL.md",
+          "hash": "9709061508228126022"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/ESLINT.md",
+          "hash": "3100736771536685484"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/GRADLE.md",
+          "hash": "15868511153961490698"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/JEST.md",
+          "hash": "8022966628634571060"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/NEXT.md",
+          "hash": "8705422121624482541"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/TURBOREPO.md",
+          "hash": "6654032474246573297"
+        },
+        {
+          "file": ".agents/skills/nx-import/references/VITE.md",
+          "hash": "5793928500507593678"
+        },
+        {
+          "file": ".agents/skills/nx-plugins/SKILL.md",
+          "hash": "4717624081372438208"
+        },
+        {
+          "file": ".agents/skills/nx-run-tasks/SKILL.md",
+          "hash": "10723914446406921246"
+        },
+        {
+          "file": ".agents/skills/nx-workspace/SKILL.md",
+          "hash": "56694506768298655"
+        },
+        {
+          "file": ".agents/skills/nx-workspace/references/AFFECTED.md",
+          "hash": "10577828056523124002"
+        },
+        {
+          "file": ".cursor/agents/ci-monitor-subagent.md",
+          "hash": "14869577228457002810"
+        },
+        {
+          "file": ".github/agents/ci-monitor-subagent.agent.md",
+          "hash": "6573591679819005545"
+        },
+        {
+          "file": ".github/prompts/monitor-ci.prompt.md",
+          "hash": "373234804653081784"
+        },
+        {
+          "file": ".github/skills/link-workspace-packages/SKILL.md",
+          "hash": "6638592300654417978"
+        },
+        {
+          "file": ".github/skills/monitor-ci/SKILL.md",
+          "hash": "8399173415832764241"
+        },
+        {
+          "file": ".github/skills/monitor-ci/references/fix-flows.md",
+          "hash": "14499115380699629375"
+        },
+        {
+          "file": ".github/skills/monitor-ci/scripts/ci-poll-decide.mjs",
+          "hash": "11489724214132048566"
+        },
+        {
+          "file": ".github/skills/monitor-ci/scripts/ci-state-update.mjs",
+          "hash": "13401974159889364904"
+        },
+        {
+          "file": ".github/skills/nx-generate/SKILL.md",
+          "hash": "12149253535688076771"
+        },
+        {
+          "file": ".github/skills/nx-import/SKILL.md",
+          "hash": "9709061508228126022"
+        },
+        {
+          "file": ".github/skills/nx-import/references/ESLINT.md",
+          "hash": "3100736771536685484"
+        },
+        {
+          "file": ".github/skills/nx-import/references/GRADLE.md",
+          "hash": "15868511153961490698"
+        },
+        {
+          "file": ".github/skills/nx-import/references/JEST.md",
+          "hash": "8022966628634571060"
+        },
+        {
+          "file": ".github/skills/nx-import/references/NEXT.md",
+          "hash": "8705422121624482541"
+        },
+        {
+          "file": ".github/skills/nx-import/references/TURBOREPO.md",
+          "hash": "6654032474246573297"
+        },
+        {
+          "file": ".github/skills/nx-import/references/VITE.md",
+          "hash": "5793928500507593678"
+        },
+        {
+          "file": ".github/skills/nx-plugins/SKILL.md",
+          "hash": "4717624081372438208"
+        },
+        {
+          "file": ".github/skills/nx-run-tasks/SKILL.md",
+          "hash": "10723914446406921246"
+        },
+        {
+          "file": ".github/skills/nx-workspace/SKILL.md",
+          "hash": "56694506768298655"
+        },
+        {
+          "file": ".github/skills/nx-workspace/references/AFFECTED.md",
+          "hash": "10577828056523124002"
+        },
+        {
           "file": ".github/workflows/ci.yml",
           "hash": "9793068951715652389"
         },
@@ -17,11 +165,15 @@
         },
         {
           "file": ".gitignore",
-          "hash": "9896342203076588575"
+          "hash": "15087553643566964854"
         },
         {
           "file": ".npmrc",
           "hash": "16042563392949187319"
+        },
+        {
+          "file": "AGENTS.md",
+          "hash": "3693179293707062853"
         },
         {
           "file": "PRODUCTION_CHECKLIST.md",
@@ -69,23 +221,23 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "10255109260662984116"
+          "hash": "386458535459607408"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "1251310801627928602"
+          "hash": "17791006964687851865"
         },
         {
           "file": "src/core/tools.ts",
-          "hash": "12088479907037156801"
+          "hash": "3283508823946365916"
         },
         {
           "file": "src/core/types.ts",
-          "hash": "11373764188114841366"
+          "hash": "3312839310053783457"
         },
         {
           "file": "src/index.ts",
-          "hash": "3005942672513944194"
+          "hash": "17341351507283679569"
         },
         {
           "file": "src/llm/OllamaClient.ts",
@@ -108,15 +260,15 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "539588193992635534"
+          "hash": "5444200005324776736"
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "14970693274609233360"
+          "hash": "12540265591037125461"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "441083585528633579"
+          "hash": "14832337517657267922"
         },
         {
           "file": "src/style.css",

@@ -1,8 +1,8 @@
 {
   "run": {
     "command": "nx build",
-    "startTime": "2026-05-07T12:40:09.960Z",
-    "endTime": "2026-05-07T12:40:09.996Z",
+    "startTime": "2026-05-23T14:52:44.134Z",
+    "endTime": "2026-05-23T14:52:46.177Z",
     "inner": false
   },
   "tasks": [
@@ -10,11 +10,11 @@
       "taskId": "page-agent-core:build",
       "target": "build",
       "projectName": "page-agent-core",
-      "hash": "2844355106764234431",
-      "startTime": "2026-05-07T12:40:09.988Z",
-      "endTime": "2026-05-07T12:40:09.994Z",
+      "hash": "12786376824469544843",
+      "startTime": "2026-05-23T14:52:44.140Z",
+      "endTime": "2026-05-23T14:52:46.176Z",
       "params": "",
-      "cacheStatus": "local-cache-hit",
+      "cacheStatus": "cache-miss",
       "status": 0
     }
   ]

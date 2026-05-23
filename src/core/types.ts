@@ -1,4 +1,4 @@
-export type AgentActionName = 'click' | 'input' | 'select' | 'scroll' | 'wait' | 'done'
+export type AgentActionName = 'click' | 'input' | 'select' | 'scroll' | 'wait' | 'navigate' | 'done'
 
 export type AgentActionArgs = {
   index?: number
@@ -8,6 +8,7 @@ export type AgentActionArgs = {
   amount?: number
   timeoutMs?: number
   result?: string
+  url?: string
 }
 
 export interface AgentAction {
@@ -95,6 +96,22 @@ export interface AgentConfigBase {
    * pages.
    */
   confirmAction?: (action: AgentAction) => boolean | Promise<boolean>
+  /**
+   * When set, the agent operates on the iframe's document and window instead
+   * of the host page. Required for the split-screen /chat view.
+   */
+  targetFrame?: HTMLIFrameElement
+  /**
+   * Optional map of human-readable page names to URL paths.
+   * When provided, the agent uses these paths for `navigate` actions.
+   *
+   * @example
+   * pages: {
+   *   'Users':    '/users',
+   *   'Settings': '/settings',
+   * }
+   */
+  pages?: Record<string, string>
 }
 
 export type AgentConfig = LLMConfig & AgentConfigBase
