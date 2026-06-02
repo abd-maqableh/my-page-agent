@@ -1,6 +1,6 @@
 # my-page-agent
 
-An initial MVP of a **Page Agent–style** TypeScript library that runs in the browser, observes interactive DOM elements, asks an LLM what to do next, executes that action, and repeats until done. It supports OpenAI-compatible chat completions APIs and local Ollama models.
+A **Page Agent–style** TypeScript library that runs in the browser, observes interactive DOM elements, asks an LLM what to do next, executes that action, and repeats until done. Works with any OpenAI-compatible endpoint — point it at OpenAI, Ollama, Groq, Azure OpenAI, LM Studio, or any compatible provider.
 
 > This is an original MVP implementation for learning/prototyping.
 
@@ -8,7 +8,7 @@ An initial MVP of a **Page Agent–style** TypeScript library that runs in the b
 
 - Scans the current page for interactive elements (buttons, links, inputs, textareas, selects, ARIA roles, clickable/tabbable elements)
 - Builds a text observation with stable numeric indexes for the current step
-- Sends task + page observation + history to an OpenAI-compatible chat completions API or Ollama
+- Sends task + page observation + history to any OpenAI-compatible chat completions endpoint
 - Expects JSON action output from the LLM
 - Executes DOM actions and loops
 - Includes a minimal floating panel UI and demo page
@@ -22,8 +22,8 @@ An initial MVP of a **Page Agent–style** TypeScript library that runs in the b
 - `src/page-controller/PageController.ts` — page observation/action executor bridge
 - `src/page-controller/domScanner.ts` — DOM scanning + indexed text rendering
 - `src/page-controller/actions.ts` — DOM action implementations
-- `src/llm/OpenAIClient.ts` — OpenAI-compatible `fetch` client + JSON parsing
-- `src/llm/OllamaClient.ts` — Ollama package integration for local models
+- `src/llm/OpenAIClient.ts` — universal OpenAI-compatible `fetch` client + JSON parsing
+- `src/llm/createLLMClient.ts` — client factory
 - `src/ui/Panel.ts` — floating UI panel
 - `src/index.ts` — public API exports
 - `src/main.ts` — demo entry point
@@ -51,9 +51,9 @@ Open the Vite URL shown in terminal.
 import { MyPageAgent, mountAgentPanel } from 'my-page-agent'
 
 const agent = new MyPageAgent({
-  baseURL: 'https://api.openai.com/v1',
+  baseURL: 'https://your-proxy.com/v1',  // any OpenAI-compatible endpoint
   apiKey: 'YOUR_API_KEY',
-  model: 'gpt-4.1-mini',
+  model: 'gpt-4o',
   maxSteps: 8,
 })
 
@@ -63,30 +63,33 @@ await agent.execute('Fill the form and submit it')
 mountAgentPanel({ baseURL, apiKey, model })
 ```
 
+## Supported LLM providers
+
+Any provider that supports the OpenAI `/v1/chat/completions` format works. You control the choice by setting `baseURL`:
+
+| Provider | `baseURL` | `apiKey` |
+|---|---|---|
+| OpenAI (via proxy) | `https://your-proxy.com/v1` | your key |
+| Ollama (local) | `http://localhost:11434/v1` | `NA` |
+| Groq | `https://api.groq.com/openai/v1` | your key |
+| Azure OpenAI | `https://resource.openai.azure.com/openai/deployments/model` | your key |
+| LM Studio / Jan | `http://localhost:1234/v1` | `NA` |
+| Any custom proxy | `https://your-backend.com/v1` | proxy token |
+
 ### Ollama example
 
-Run Ollama locally, pull any chat model you want to use, then point the agent at it:
+Run Ollama locally, pull any chat model, then point the agent at its `/v1` endpoint:
 
 ```bash
 ollama pull llama3.2
 ```
 
 ```ts
-import { MyPageAgent, mountAgentPanel } from 'my-page-agent'
-
 const agent = new MyPageAgent({
-  provider: 'ollama',
-  baseURL: 'http://localhost:11434',
+  baseURL: 'http://localhost:11434/v1',
+  apiKey: 'NA',
   model: 'llama3.2',
   maxSteps: 8,
-})
-
-await agent.execute('Fill the form and submit it')
-
-mountAgentPanel({
-  provider: 'ollama',
-  baseURL: 'http://localhost:11434',
-  model: 'llama3.2',
 })
 ```
 
@@ -94,14 +97,14 @@ mountAgentPanel({
 
 `MyPageAgent` accepts:
 
-- `provider?: "openai"` — OpenAI-compatible chat completions API (default)
-- `provider: "ollama"` — Ollama package integration
-- `baseURL: string` — OpenAI-compatible API base URL, or Ollama host when `provider` is `"ollama"`
-- `apiKey: string` — API key used in `Authorization: Bearer ...` for OpenAI-compatible APIs
-- `model: string` — chat model name, including any locally installed Ollama model
+- `baseURL: string` — the `/v1` endpoint of any OpenAI-compatible service
+- `apiKey: string` — API key or `'NA'` for local models with no auth
+- `model: string` — model name (e.g. `'gpt-4o'`, `'llama3.2'`, `'qwen3:14b'`)
 - `temperature?: number`
 - `maxSteps?: number` (default `10`)
 - `callbacks?: { onStatus?, onStep? }`
+- `confirmAction?: (action) => boolean | Promise<boolean>` — safety gate before each action
+- `allowDirectProvider?: boolean` — opt-in to call known provider hosts directly (NOT recommended in production)
 
 ## Action contract
 

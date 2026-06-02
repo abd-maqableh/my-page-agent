@@ -1,6 +1,6 @@
 {
   "version": "6.0",
-  "nxVersion": "20.3.0",
+  "nxVersion": "22.7.5",
   "pathMappings": {},
   "nxJsonPlugins": [],
   "fileMap": {
@@ -177,11 +177,15 @@
         },
         {
           "file": "ARCHITECTURE.md",
-          "hash": "6445296843412193557"
+          "hash": "6785328729095657906"
         },
         {
           "file": "CODEBASE.md",
-          "hash": "15449438809429291476"
+          "hash": "6002484961755595699"
+        },
+        {
+          "file": "CODEBASE_EXPLAINED.md",
+          "hash": "13113912796489044443"
         },
         {
           "file": "PRODUCTION_CHECKLIST.md",
@@ -189,7 +193,7 @@
         },
         {
           "file": "README.md",
-          "hash": "17830428358792695958"
+          "hash": "793570562129493315"
         },
         {
           "file": "index.html",
@@ -197,23 +201,11 @@
         },
         {
           "file": "nx.json",
-          "hash": "16177049214334501670"
+          "hash": "17726075431844042398"
         },
         {
           "file": "package.json",
-          "hash": "1464611974730267425",
-          "deps": [
-            "npm:ollama",
-            "npm:@nx/js",
-            "npm:@nx/vite",
-            "npm:@types/node",
-            "npm:jsdom",
-            "npm:nx",
-            "npm:typescript",
-            "npm:vite",
-            "npm:vite-plugin-dts",
-            "npm:vitest"
-          ]
+          "hash": "542153140972473395"
         },
         {
           "file": "project.json",
@@ -233,38 +225,31 @@
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "15421896384585969441"
+          "hash": "12558413954655637226"
         },
         {
           "file": "src/core/tools.ts",
-          "hash": "3283508823946365916"
+          "hash": "609463052098944139"
         },
         {
           "file": "src/core/types.ts",
-          "hash": "3312839310053783457"
+          "hash": "10868071795945587165"
         },
         {
           "file": "src/index.ts",
-          "hash": "17341351507283679569"
-        },
-        {
-          "file": "src/llm/OllamaClient.ts",
-          "hash": "14438345912311814583",
-          "deps": [
-            "npm:ollama"
-          ]
+          "hash": "13061941769758259300"
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "7884158200477778056"
+          "hash": "13063055441767711484"
         },
         {
           "file": "src/llm/createLLMClient.ts",
-          "hash": "12578432111627518568"
+          "hash": "9895821646192073898"
         },
         {
           "file": "src/main.ts",
-          "hash": "69516181900537720"
+          "hash": "6371374143454914899"
         },
         {
           "file": "src/page-controller/PageController.ts",
@@ -272,19 +257,23 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "7925544434658600878"
+          "hash": "16446309857872731452"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "17711890747989440953"
+          "hash": "17988606228606038907"
         },
         {
           "file": "src/style.css",
           "hash": "15270870770049546504"
         },
         {
+          "file": "src/test/admin-yallgo.code-workspace",
+          "hash": "17456431352775212755"
+        },
+        {
           "file": "src/test/openai-client.test.ts",
-          "hash": "10288479596241078948",
+          "hash": "5982156550345166951",
           "deps": [
             "npm:vitest"
           ]
@@ -333,9 +322,10 @@
         },
         {
           "file": "yarn.lock",
-          "hash": "11325908535697209469"
+          "hash": "4962968852429834449"
         }
       ]
     }
-  }
+  },
+  "externalNodesHash": "8642858011139756265"
 }

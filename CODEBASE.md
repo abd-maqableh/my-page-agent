@@ -182,7 +182,7 @@ All shared TypeScript interfaces and type aliases.
 | `LLMClient` | Interface: one method `getNextAction(messages): Promise<AgentAction>`. |
 | `OpenAIConfig` | `baseURL`, `apiKey`, `model`, `temperature?`, `allowDirectProvider?`. |
 | `OllamaConfig` | `provider: 'ollama'`, `baseURL?`, `model`, `temperature?`. |
-| `LLMConfig` | `OpenAIConfig \| OllamaConfig`. |
+| `LLMConfig` | `{ baseURL, apiKey, model, temperature?, allowDirectProvider? }` — universal config for any OpenAI-compatible endpoint. |
 | `AgentConfigBase` | `maxSteps?`, `callbacks?`, `confirmAction?`, `targetFrame?`, `pages?`. |
 | `AgentConfig` | `LLMConfig & AgentConfigBase` — the single config object consumers pass. |
 | `ChatMessage` | `{ role: 'system' \| 'user' \| 'assistant', content: string }`. |
@@ -194,13 +194,13 @@ All shared TypeScript interfaces and type aliases.
 ### `src/llm/createLLMClient.ts`
 
 **`createLLMClient(config): LLMClient`**  
-Factory. Returns `new OllamaClient(config)` if `config.provider === 'ollama'`; otherwise returns `new OpenAIClient(config)`.
+Factory. Always returns `new OpenAIClient(config)`. Any OpenAI-compatible endpoint is supported by pointing `baseURL` at it.
 
 ---
 
 ### `src/llm/OpenAIClient.ts`
 
-Handles any OpenAI-compatible HTTP API.
+Universal client for any OpenAI-compatible HTTP API — works with OpenAI (via proxy), Ollama (`/v1`), Groq, Azure OpenAI, LM Studio, and others.
 
 **`assertSafeBaseURL(baseURL, allowDirectProvider)`**  
 Security guard. Parses the hostname and refuses to continue if it matches a known public provider domain (e.g. `api.openai.com`, `api.anthropic.com`) unless `allowDirectProvider: true` is explicitly set. This prevents accidental API key exposure from the browser.
@@ -209,19 +209,10 @@ Security guard. Parses the hostname and refuses to continue if it matches a know
 Strips markdown code fences (` ```json ... ``` `) if present. Then walks the string character-by-character maintaining a brace-depth counter and string/escape state to extract the first complete, balanced `{...}` JSON object. This tolerates LLMs that append prose after the JSON.
 
 **`parseAgentActionResponse(raw): AgentAction`**  
-Calls `extractJSON` → `JSON.parse` → `normalizeAction`. The single function used by both `OpenAIClient` and `OllamaClient` to turn raw model text into a typed action.
+Calls `extractJSON` → `JSON.parse` → `normalizeAction`. Turns raw model text into a typed action.
 
 **`class OpenAIClient`**  
 `getNextAction(messages)` — POSTs to `{baseURL}/chat/completions` with the model name, temperature, and messages. Reads `choices[0].message.content` from the response and calls `parseAgentActionResponse`.
-
----
-
-### `src/llm/OllamaClient.ts`
-
-**`class OllamaClient`**  
-Uses the `ollama/browser` package to talk to a local Ollama instance.
-
-`getNextAction(messages)` — calls `ollama.chat()` with `format: 'json'` to force JSON output. Reads `response.message.content` and delegates to `parseAgentActionResponse`.
 
 ---
 

@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../../../admin-yallgo"
+		},
+		{
+			"path": "../.."
+		}
+	],
+	"settings": {
+		"typescript.tsdk": "node_modules/typescript/lib"
+	}
+}

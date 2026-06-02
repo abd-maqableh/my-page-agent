@@ -63,8 +63,12 @@ fakeLink?.addEventListener('click', (event) => {
 })
 
 mountAgentPanel({
-  provider: 'ollama',
-  baseURL: 'http://localhost:11434',
+  // Point baseURL at any OpenAI-compatible endpoint:
+  //   Ollama local:  'http://localhost:11434/v1'  (apiKey: 'NA')
+  //   Groq:          'https://api.groq.com/openai/v1'
+  //   OpenAI proxy:  'https://your-proxy.com/v1'
+  baseURL: 'http://localhost:11434/v1',
+  apiKey: 'NA',
   model: 'llama3.2',
   temperature: 0,
   maxSteps: 8,

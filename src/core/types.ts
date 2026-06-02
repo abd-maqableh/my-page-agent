@@ -1,4 +1,14 @@
-export type AgentActionName = 'click' | 'input' | 'select' | 'scroll' | 'wait' | 'navigate' | 'done'
+export type AgentActionName =
+  | 'click'
+  | 'input'
+  | 'select'
+  | 'scroll'
+  | 'wait'
+  | 'navigate'
+  | 'clear'
+  | 'press_key'
+  | 'hover'
+  | 'done'
 
 export type AgentActionArgs = {
   index?: number
@@ -9,6 +19,7 @@ export type AgentActionArgs = {
   timeoutMs?: number
   result?: string
   url?: string
+  key?: string
 }
 
 export interface AgentAction {
@@ -56,14 +67,27 @@ export interface AgentRunResult {
   message: string
 }
 
-export type LLMProvider = 'openai' | 'ollama'
-
 export interface LLMClient {
   getNextAction(messages: ChatMessage[]): Promise<AgentAction>
 }
 
-export interface OpenAIConfig {
-  provider?: 'openai'
+/**
+ * Universal LLM configuration. Point `baseURL` at any OpenAI-compatible
+ * endpoint — OpenAI proxy, Ollama, Groq, Azure OpenAI, LM Studio, etc.
+ *
+ * @example OpenAI (via backend proxy — recommended)
+ * { baseURL: 'https://your-proxy.com/v1', apiKey: 'token', model: 'gpt-4o' }
+ *
+ * @example Ollama local
+ * { baseURL: 'http://localhost:11434/v1', apiKey: 'NA', model: 'llama3.2' }
+ *
+ * @example Groq cloud
+ * { baseURL: 'https://api.groq.com/openai/v1', apiKey: '...', model: 'llama-3.3-70b-versatile' }
+ *
+ * @example Azure OpenAI
+ * { baseURL: 'https://your-resource.openai.azure.com/openai/deployments/gpt-4o', apiKey: '...' }
+ */
+export interface LLMConfig {
   baseURL: string
   apiKey: string
   model: string
@@ -76,15 +100,6 @@ export interface OpenAIConfig {
    */
   allowDirectProvider?: boolean
 }
-
-export interface OllamaConfig {
-  provider: 'ollama'
-  baseURL?: string
-  model: string
-  temperature?: number
-}
-
-export type LLMConfig = OpenAIConfig | OllamaConfig
 
 export interface AgentConfigBase {
   maxSteps?: number

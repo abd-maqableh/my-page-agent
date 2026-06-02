@@ -1,5 +1,5 @@
 import { normalizeAction } from '../core/tools'
-import type { AgentAction, ChatMessage, LLMClient, OpenAIConfig } from '../core/types'
+import type { AgentAction, ChatMessage, LLMClient, LLMConfig } from '../core/types'
 
 interface ChatCompletionsResponse {
   choices?: Array<{
@@ -84,9 +84,9 @@ function assertSafeBaseURL(baseURL: string, allowDirectProvider: boolean | undef
 }
 
 export class OpenAIClient implements LLMClient {
-  private readonly config: OpenAIConfig
+  private readonly config: LLMConfig
 
-  constructor(config: OpenAIConfig) {
+  constructor(config: LLMConfig) {
     assertSafeBaseURL(config.baseURL, config.allowDirectProvider)
     this.config = config
   }

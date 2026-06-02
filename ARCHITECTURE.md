@@ -11,8 +11,7 @@ flowchart TD
     MyPageAgent["MyPageAgent\n(index.ts)"]
     Agent["Agent\ncore/Agent.ts"]
     LLMFactory["createLLMClient\nllm/createLLMClient.ts"]
-    OpenAI["OpenAIClient\nllm/OpenAIClient.ts"]
-    Ollama["OllamaClient\nllm/OllamaClient.ts"]
+    OpenAI["OpenAIClient\nllm/OpenAIClient.ts\n(universal — works with\nOllama, Groq, Azure, etc.)"]
     Normalizer["normalizeAction\ncore/tools.ts"]
     PageCtrl["PageController\npage-controller/PageController.ts"]
     Scanner["scanInteractiveElements\npage-controller/domScanner.ts"]
@@ -88,10 +87,8 @@ flowchart TD
 
     %% ── LLM clients ───────────────────────────────────
     LLM_REQ --> LLMFactory
-    LLMFactory -->|"provider=openai"| OpenAI
-    LLMFactory -->|"provider=ollama"| Ollama
+    LLMFactory --> OpenAI
     OpenAI -->|"raw JSON"| Normalizer
-    Ollama -->|"raw JSON"| Normalizer
     Normalizer -->|"AgentAction"| CONFIRM
 
     %% ── DOM execution ─────────────────────────────────
@@ -151,13 +148,7 @@ classDiagram
     }
 
     class OpenAIClient {
-        -config: OpenAIConfig
-        +getNextAction(messages) AgentAction
-    }
-
-    class OllamaClient {
-        -client: Ollama
-        -config: OllamaConfig
+        -config: LLMConfig
         +getNextAction(messages) AgentAction
     }
 
@@ -182,7 +173,6 @@ classDiagram
     Agent --> PageController : observe + execute
     Agent --> LLMClient : getNextAction
     LLMClient <|.. OpenAIClient : implements
-    LLMClient <|.. OllamaClient : implements
     Panel --> MyPageAgent : calls execute / listens to events
 ```
 

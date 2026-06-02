@@ -33,6 +33,7 @@
     "README.md"
   ],
   "sideEffects": false,
+  "packageManager": "yarn@1.22.22",
   "scripts": {
     "dev": "vite --config vite.demo.config.ts",
     "build": "nx build",
@@ -43,24 +44,25 @@
     "release": "nx release",
     "release:dry": "nx release --dry-run"
   },
-  "peerDependencies": {
-    "ollama": "^0.6.3"
-  },
   "peerDependenciesMeta": {
     "ollama": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@nx/js": "20.3.0",
-    "@nx/vite": "20.3.0",
+    "@nx/js": "22.7.5",
+    "@nx/vite": "22.7.5",
     "@types/node": "^22.10.0",
     "jsdom": "^25.0.1",
-    "nx": "20.3.0",
-    "ollama": "^0.6.3",
+    "nx": "22.7.5",
     "typescript": "~5.7.2",
-    "vite": "^6.0.3",
+    "vite": "^6.3.5",
     "vite-plugin-dts": "^4.3.0",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.0"
+  },
+  "resolutions": {
+    "brace-expansion": "^5.0.6",
+    "ws": "^8.20.1",
+    "vite": "^6.3.5"
   }
 }

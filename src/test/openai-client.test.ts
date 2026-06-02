@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OllamaClient } from '../llm/OllamaClient'
 import { OpenAIClient, parseAgentActionResponse } from '../llm/OpenAIClient'
 
 const originalFetch = globalThis.fetch
@@ -63,16 +62,18 @@ describe('OpenAIClient security guard', () => {
   })
 })
 
-describe('OllamaClient', () => {
-  it('requests a JSON chat action through Ollama', async () => {
+describe('OpenAIClient — Ollama-compatible endpoint', () => {
+  it('calls Ollama via its OpenAI-compatible /v1/chat/completions endpoint', async () => {
     const fetchMock = vi.fn(async () => {
-      return new Response(JSON.stringify({ message: { content: '{"action":"done","args":{"result":"ok"}}' } }))
+      return new Response(
+        JSON.stringify({ choices: [{ message: { content: '{"action":"done","args":{"result":"ok"}}' } }] }),
+      )
     })
     globalThis.fetch = fetchMock as typeof fetch
 
-    const client = new OllamaClient({
-      provider: 'ollama',
-      baseURL: 'http://localhost:11434',
+    const client = new OpenAIClient({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
       model: 'llama3.2',
       temperature: 0,
     })
@@ -84,12 +85,10 @@ describe('OllamaClient', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
 
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
-    expect(url).toBe('http://localhost:11434/api/chat')
+    expect(url).toBe('http://localhost:11434/v1/chat/completions')
     expect(JSON.parse(String(init.body))).toMatchObject({
       model: 'llama3.2',
-      format: 'json',
-      stream: false,
-      options: { temperature: 0 },
+      temperature: 0,
     })
   })
 })

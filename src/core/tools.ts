@@ -1,6 +1,6 @@
 import type { AgentAction, AgentActionName } from './types'
 
-const VALID_ACTIONS: AgentActionName[] = ['click', 'input', 'select', 'scroll', 'wait', 'navigate', 'done']
+const VALID_ACTIONS: AgentActionName[] = ['click', 'input', 'select', 'clear', 'press_key', 'hover', 'scroll', 'wait', 'navigate', 'done']
 
 export function isValidActionName(action: string): action is AgentActionName {
   return VALID_ACTIONS.includes(action as AgentActionName)
@@ -20,7 +20,7 @@ export function normalizeAction(input: unknown): AgentAction {
   // {"action":"click","index":3} instead of {"action":"click","args":{"index":3}}
   // Collect any known arg keys from the top-level object as a fallback.
   const flatArgs: Record<string, unknown> = {}
-  const ARG_KEYS = ['index', 'text', 'value', 'direction', 'amount', 'timeoutMs', 'result', 'url']
+  const ARG_KEYS = ['index', 'text', 'value', 'direction', 'amount', 'timeoutMs', 'result', 'url', 'key']
   for (const key of ARG_KEYS) {
     if (key in raw) flatArgs[key] = raw[key]
   }
@@ -35,7 +35,7 @@ export function normalizeAction(input: unknown): AgentAction {
 
   // Last-resort: if index is still missing for actions that need it,
   // try to extract it from the thought — models often write "element [5]" or "[5]"
-  const INDEX_ACTIONS = ['click', 'input', 'select']
+  const INDEX_ACTIONS = ['click', 'input', 'select', 'clear', 'hover']
   if (INDEX_ACTIONS.includes(String(raw.action)) && mergedArgs.index === undefined) {
     const thought = typeof raw.thought === 'string' ? raw.thought : ''
     const match = thought.match(/\[(\d+)\]/) ?? thought.match(/element\s+(\d+)/i)
