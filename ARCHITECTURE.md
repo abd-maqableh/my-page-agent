@@ -76,7 +76,7 @@ flowchart TD
 
     %% ── DOM scanning ──────────────────────────────────
     Agent --> OBS1
-    PageCtrl -->|"scanInteractiveElements(doc, win)"| Scanner
+    PageCtrl -->|"scanInteractiveElements(doc, win, declaredSections)"| Scanner
     Scanner -->|"reads"| DOM
     Scanner -->|"ScanResult {elements, elementMap, text}"| PageCtrl
     PageCtrl -->|"PageObservation"| Agent
@@ -142,6 +142,7 @@ classDiagram
     class PageController {
         -elementMap: Map~number, Element~
         -targetFrame: HTMLIFrameElement
+        -declaredSections: string[]
         -getDocWin() DocWin
         +observe() PageObservation
         +executeAction(action) ActionExecutionResult
@@ -199,7 +200,7 @@ sequenceDiagram
 
     loop Step 1…maxSteps
         Agent->>PageCtrl: observe()
-        PageCtrl->>Scanner: scanInteractiveElements(doc, win)
+        PageCtrl->>Scanner: scanInteractiveElements(doc, win, declaredSections)
         Scanner->>DOM: querySelectorAll(INTERACTIVE_SELECTOR)
         DOM-->>Scanner: Element[]
         Scanner-->>PageCtrl: ScanResult {elements, elementMap, text}

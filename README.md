@@ -105,6 +105,38 @@ const agent = new MyPageAgent({
 - `callbacks?: { onStatus?, onStep? }`
 - `confirmAction?: (action) => boolean | Promise<boolean>` — safety gate before each action
 - `allowDirectProvider?: boolean` — opt-in to call known provider hosts directly (NOT recommended in production)
+- `pages?: Record<string, string | PageDescriptor>` — map of human-readable page names to paths used for `navigate` actions
+
+### Declaring page sections & sub-pages
+
+A `pages` value can be a plain path string, or a `PageDescriptor` that also declares the page's in-page **sections** and nested **sub-pages**:
+
+```ts
+const agent = new MyPageAgent({
+  baseURL, apiKey, model,
+  pages: {
+    // plain path
+    'Orders': '/dashboard/order',
+
+    // page with in-page sections
+    'Sales': {
+      path: '/dashboard/sales',
+      sections: ['Payout Overview', 'Sales Performance', 'Top Selling Trips'],
+    },
+
+    // page with nested sub-pages
+    'Users': {
+      path: '/dashboard/user/list',
+      subPages: {
+        'Companies': '/dashboard/user/company',
+        'Roles':     '/dashboard/user/role',
+      },
+    },
+  },
+})
+```
+
+When `sections` are declared, the agent can resolve a cross-page request such as **"show me Sales Performance"** even from another page: it navigates to the owning page first, then scrolls to that section. Section names should match the on-page section headings (titles can be `<h1>`–`<h6>` **or** spans/`Typography`); add a `data-agent-section="<name>"` attribute to a section's container for guaranteed matching.
 
 ## Action contract
 

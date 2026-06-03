@@ -5,9 +5,11 @@ import { scanInteractiveElements } from './domScanner'
 export class PageController {
   private elementMap = new Map<number, Element>()
   private readonly targetFrame?: HTMLIFrameElement
+  private readonly declaredSections: string[]
 
-  constructor(targetFrame?: HTMLIFrameElement) {
+  constructor(targetFrame?: HTMLIFrameElement, declaredSections: string[] = []) {
     this.targetFrame = targetFrame
+    this.declaredSections = declaredSections
   }
 
   private getDocWin(): { doc: Document; win: Window & typeof globalThis } {
@@ -18,7 +20,7 @@ export class PageController {
 
   observe(): PageObservation {
     const { doc, win } = this.getDocWin()
-    const scan = scanInteractiveElements(doc, win)
+    const scan = scanInteractiveElements(doc, win, this.declaredSections)
     this.elementMap = scan.elementMap
 
     return {

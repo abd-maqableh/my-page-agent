@@ -76,12 +76,12 @@ The brain of the system. Runs the observe → think → act loop.
 | `pageController` | `PageController` instance for reading and acting on the DOM. |
 | `callbacks` | Optional `onStatus` / `onStep` hooks. |
 | `confirmAction` | Optional gate function called before every action. |
-| `pages` | Optional map of page names → URL paths for `navigate` actions. |
+| `pages` | Optional map of page names → URL paths (or `PageDescriptor` objects with `sections` / `subPages`) for `navigate` actions and section jumps. |
 
 ---
 
 **`constructor(config)`**  
-Resolves `maxSteps` (default 10), creates the LLM client, creates a `PageController` (optionally scoped to an iframe), and stores callbacks and guards.
+Resolves `maxSteps` (default 10), creates the LLM client, and creates a `PageController` (optionally scoped to an iframe). It also gathers every declared section name from the `pages` config via `collectDeclaredSections(config.pages)` — a recursive walk that collects `PageDescriptor.sections` (including from nested `subPages`) — and passes that list to the `PageController` so the scanner can surface `SECTION:` landmarks. Callbacks and guards are stored too.
 
 ---
 
@@ -134,7 +134,9 @@ Returns a two-message array:
   - Rules 1–10: how to pick element indexes, when to use `select` vs `input`, how to handle filter dropdowns vs search boxes, per-item action menus, when to call `done`.
   - Rule 9b (updated): if the **last history entry** shows `"navigated to"` in its result message, the view/open action is complete — call `done` immediately.
   - Rule 10 (updated): when the user wants to view/edit an item, click the `"Per-item actions menu"` button; the agent (not the LLM) will auto-click the matching menu item — so the LLM must **not** call `done` immediately after the menu click.
-  - Rules 11–13 (conditional, only when `pages` is provided): navigation rules and the known path map.
+  - Rules 11–13 (conditional, only when `pages` is provided): navigation rules and the known path map (rendered by `formatPagePaths`, which flattens nested sub-pages and appends inline `[sections: ...]` hints).
+  - Rule 12b CROSS-PAGE SECTION RULE (conditional, only when any page declares `sections`): navigate to a section's owning page first, then scroll to the matching `SECTION: <name>` landmark.
+  - Rule 24 SECTION FOCUS RULE: scroll to a `SECTION: <name>` landmark on the current page.
 
 - **User message** — the task text, current page URL/title, the numbered element list, and the formatted history.
 
@@ -183,7 +185,8 @@ All shared TypeScript interfaces and type aliases.
 | `OpenAIConfig` | `baseURL`, `apiKey`, `model`, `temperature?`, `allowDirectProvider?`. |
 | `OllamaConfig` | `provider: 'ollama'`, `baseURL?`, `model`, `temperature?`. |
 | `LLMConfig` | `{ baseURL, apiKey, model, temperature?, allowDirectProvider? }` — universal config for any OpenAI-compatible endpoint. |
-| `AgentConfigBase` | `maxSteps?`, `callbacks?`, `confirmAction?`, `targetFrame?`, `pages?`. |
+| `AgentConfigBase` | `maxSteps?`, `callbacks?`, `confirmAction?`, `targetFrame?`, `pages?` (`Record<string, string \| PageDescriptor>`). |
+| `PageDescriptor` | `{ path, sections?: string[], subPages?: Record<string, string \| PageDescriptor> }` — rich page description for in-page section jumps and nested sub-pages. |
 | `AgentConfig` | `LLMConfig & AgentConfigBase` — the single config object consumers pass. |
 | `ChatMessage` | `{ role: 'system' \| 'user' \| 'assistant', content: string }`. |
 
@@ -230,12 +233,13 @@ Abstracts the target document/window so the agent works identically on the host 
 |---|---|
 | `elementMap` | `Map<number, Element>` — index → DOM element, rebuilt every `observe()` call. |
 | `targetFrame` | Optional `<iframe>` reference. When set, all DOM access goes through `contentDocument`/`contentWindow`. |
+| `declaredSections` | `string[]` of section names gathered from the `pages` config (via `PageDescriptor.sections`). Passed into the scanner so it can surface matching titles as `SECTION:` landmarks. |
 
 **`getDocWin(): { doc, win }`**  
 Returns the correct `Document` and `Window` pair — either from the iframe or the host page.
 
 **`observe(): PageObservation`**  
-Calls `scanInteractiveElements(doc, win)`, updates `elementMap`, and returns `{ url, title, elements, elementsText }`.
+Calls `scanInteractiveElements(doc, win, declaredSections)`, updates `elementMap`, and returns `{ url, title, elements, elementsText }`.
 
 **`executeAction(action): Promise<ActionExecutionResult>`**  
 Calls `runAction(action, this.elementMap, doc, win)` with the correct document/window context.
@@ -274,12 +278,14 @@ Returns the `type` attribute for `<input>` elements (e.g. `"text"`, `"checkbox"`
 
 ---
 
-**`scanInteractiveElements(root, win): ScanResult`**  
+**`scanInteractiveElements(root, win, declaredSections?): ScanResult`**  
 1. Queries all elements matching the interactive CSS selector list (`button`, `a[href]`, `input`, `textarea`, `select`, and ARIA roles `button`, `link`, `textbox`, `combobox`, `menuitem`, `option`, `[onclick]`, `[tabindex]`).
 2. Deduplicates and filters to visible elements only.
 3. Excludes any element inside `[data-agent-panel]` (the agent's own Panel UI, so the LLM cannot accidentally interact with it).
 4. Assigns 1-based numeric indexes and builds the `elementMap`.
 5. Serialises to a text block: `[1] button "Submit"`, `[2] input:text "Search"`, etc.
+
+**Section landmark pass.** The scanner also emits non-interactive `SECTION: <name>` landmarks so the agent can scroll to in-page sections. It matches headings against `declaredSections` (the names declared in the `pages` config). Because many section titles are **spans / `Typography`, not `<h1>`–`<h6>`**, the scanner inspects a broad set of title-like elements (`h1–h6, span, strong, b, p, legend, figcaption, [class*="title"]`), compares each element's own text against the declared names (ignoring filler words), and resolves the nearest card container to anchor the landmark.
 
 ---
 

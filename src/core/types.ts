@@ -120,13 +120,50 @@ export interface AgentConfigBase {
    * Optional map of human-readable page names to URL paths.
    * When provided, the agent uses these paths for `navigate` actions.
    *
-   * @example
+   * A value can be either a plain path string OR a {@link PageDescriptor}
+   * that also declares the page's in-page `sections` and nested `subPages`.
+   * Declaring `sections` lets the agent resolve a request like
+   * "show me Sales Performance" to the owning page even when the user is
+   * currently on a different page: it navigates there first, then scrolls
+   * to the section.
+   *
+   * @example simple
    * pages: {
    *   'Users':    '/users',
    *   'Settings': '/settings',
    * }
+   *
+   * @example with sections & sub-pages
+   * pages: {
+   *   'Sales': {
+   *     path: '/dashboard/sales',
+   *     sections: ['Payout Overview', 'Sales Performance', 'Top Selling Trips'],
+   *   },
+   *   'Users': {
+   *     path: '/dashboard/user/list',
+   *     subPages: { 'Roles': '/dashboard/user/role' },
+   *   },
+   * }
    */
-  pages?: Record<string, string>
+  pages?: Record<string, string | PageDescriptor>
+}
+
+/**
+ * Rich description of a known page. Use instead of a plain path string when a
+ * page contains named in-page sections (chart cards, widgets, panels) the user
+ * may want to jump to, or nested sub-pages reachable from it.
+ */
+export interface PageDescriptor {
+  /** URL path the agent navigates to for this page. */
+  path: string
+  /**
+   * Names of in-page sections the user can scroll/jump to. These should match
+   * the on-page section headings (or `data-agent-section` attributes) so the
+   * scanner can locate them after navigation.
+   */
+  sections?: string[]
+  /** Nested sub-pages reachable from this page (label → path or descriptor). */
+  subPages?: Record<string, string | PageDescriptor>
 }
 
 export type AgentConfig = LLMConfig & AgentConfigBase

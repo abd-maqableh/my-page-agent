@@ -1,6 +1,46 @@
-import type { AgentHistoryEntry, ChatMessage, PageObservation } from './types'
+import type { AgentHistoryEntry, ChatMessage, PageDescriptor, PageObservation } from './types'
 
 const MAX_HISTORY_ENTRIES = 8
+
+type PagesMap = Record<string, string | PageDescriptor>
+
+/**
+ * Flatten the (possibly nested) pages map into printable "label → path" lines,
+ * appending an inline "[sections: ...]" hint when a page declares sections.
+ * Sub-pages are emitted as their own indented entries so they are navigable too.
+ */
+function formatPagePaths(pages: PagesMap, indent = '       '): string {
+  const lines: string[] = []
+
+  const walk = (map: PagesMap, pad: string) => {
+    for (const [label, value] of Object.entries(map)) {
+      if (typeof value === 'string') {
+        lines.push(`${pad}${label.padEnd(24)} → ${value}`)
+        continue
+      }
+      const sectionsHint =
+        value.sections && value.sections.length > 0
+          ? `   [sections: ${value.sections.join(', ')}]`
+          : ''
+      lines.push(`${pad}${label.padEnd(24)} → ${value.path}${sectionsHint}`)
+      if (value.subPages && Object.keys(value.subPages).length > 0) {
+        walk(value.subPages, `${pad}  ↳ `)
+      }
+    }
+  }
+
+  walk(pages, indent)
+  return lines.join('\n')
+}
+
+/** True when at least one page in the map declares sections. */
+function hasDeclaredSections(pages: PagesMap): boolean {
+  return Object.values(pages).some((value) => {
+    if (typeof value === 'string') return false
+    if (value.sections && value.sections.length > 0) return true
+    return value.subPages ? hasDeclaredSections(value.subPages) : false
+  })
+}
 
 function formatHistory(history: AgentHistoryEntry[]): string {
   if (!history.length) {
@@ -23,19 +63,22 @@ export function buildPrompt(
   task: string,
   observation: PageObservation,
   history: AgentHistoryEntry[],
-  pages?: Record<string, string>,
+  pages?: PagesMap,
 ): ChatMessage[] {
   const navigationRules: string[] = []
   if (pages && Object.keys(pages).length > 0) {
-    const pathLines = Object.entries(pages)
-      .map(([label, path]) => `       ${label.padEnd(24)} → ${path}`)
-      .join('\n')
+    const pathLines = formatPagePaths(pages)
     navigationRules.push(
       ' 11. NAVIGATION RULE: When the user asks ONLY to "show", "open", "go to", or "take me to" a section/page, use `navigate` with the correct URL path, then `done`. If the user also asked to filter, search, view, or edit something after navigation, continue with those remaining steps instead of stopping. Navigation takes ~2s internally — do NOT add a `wait` step after `navigate`.',
       ` 12. KNOWN PAGE PATHS — use these exact values for \`navigate\`:\n${pathLines}`,
       ' 13. COMBINED NAVIGATE + NARROW + ITEM ACTION: If asked to navigate, then filter/search, then open/view/edit a specific item, do those in order: `navigate` first, then narrow the list, then act on the matching item. Do not filter before navigating, and do not stop before the requested item action is complete.',
       ' 13b. BUTTON-VS-NAVIGATE RULE: `navigate` is ONLY for the labels listed in KNOWN PAGE PATHS above. If the user mentions a target (e.g. "settings", "filters", "profile menu") that is NOT in that list BUT appears as a button/link in the current elements (any label containing that word), `click` that element instead. Never invent a URL path that is not in KNOWN PAGE PATHS — using an unlisted path will produce a 404.',
     )
+    if (hasDeclaredSections(pages)) {
+      navigationRules.push(
+        ' 12b. CROSS-PAGE SECTION RULE: Some KNOWN PAGE PATHS entries list "[sections: ...]" — these are in-page landmarks (chart cards, widgets, panels) that live ON that specific page. When the user asks to "show", "go to", "scroll to", or "take me to" a name that matches an entry in some page\'s "[sections: ...]" list:\n      step 1 — CHECK CURRENT PAGE: compare the current Page URL/title against that page\'s path. If you are NOT already on it, `navigate` to that page\'s path first. Do NOT scroll yet — the section is not in the current DOM until you arrive.\n      step 2 — AFTER ARRIVING, follow the SECTION FOCUS RULE (24): find the matching "SECTION: <name>" element in the elements list and `scroll` to its index, then `done`.\n      NEVER call `done` after only navigating when a section still needs to be scrolled to. NEVER `scroll` to a section before navigating to its owning page. If the requested name is NOT in any page\'s "[sections: ...]" list and not a known page, treat it with the normal SECTION FOCUS RULE on the current page.',
+      )
+    }
   }
 
   const system = [
@@ -57,9 +100,11 @@ export function buildPrompt(
     '  2. Never invent element indexes; only use indexes shown in the list.',
     '  3. If the task is complete or impossible, use "done".',
     '  4. Output ONLY the JSON object. No other text.',
-    '  5. STATUS FILTER RULE: When asked to filter by a STATUS (e.g. "show active items", "pending only", "archived"), find the element labelled "FILTER DROPDOWN:" and use `select` with the status value (e.g. {"index":7,"value":"active"}). This opens the dropdown AND selects the option in one shot. Do NOT use `click` to open it manually.',
+    '  4b. REQUEST DECOMPOSITION RULE: A request such as "show me <qualifier> <entity>" (e.g. "show approved orders", "active users", "pending requests", "laptops in products") combines TWO parts: (a) a TARGET SECTION = the entity noun (orders / users / requests / products) and (b) a QUALIFIER = the adjective, status, or keyword (approved / active / pending / laptops). Resolve them strictly in this order:\n      step 1 — LOCATE THE SECTION: compare the entity noun against the CURRENT Page title/URL. If they already match (you are on that section), do NOT navigate — skip to step 2. If they do NOT match, get onto that section first: use `navigate` if the entity matches a KNOWN PAGE PATHS label, otherwise `click` a sidebar/nav link whose label matches the entity.\n      step 2 — APPLY THE QUALIFIER on that page: if the qualifier is one of a FILTER DROPDOWN\'s fixed options, use the STATUS FILTER RULE (`select`); if it is free text, use the KEYWORD SEARCH RULE (`input`).\n      Never apply the qualifier before you are on the correct section, and never call `done` after only navigating if a qualifier still needs to be applied. Do NOT assume the qualifier requires a brand-new page when a FILTER DROPDOWN or SEARCH BOX on the current page can satisfy it.',
+    '  5. STATUS FILTER RULE: When asked to filter by a STATUS (e.g. "show active items", "pending only", "archived"), find the element labelled "FILTER DROPDOWN:" and use `select` with the status value (e.g. {"index":7,"value":"active"}). This opens the dropdown AND selects the option in one shot. Do NOT use `click` to open it manually. If the FILTER DROPDOWN shows a "[options: ...]" list, you MUST pick the value that best matches the request FROM that list (case-insensitive, allowing synonyms — e.g. "approved" may map to "Completed"/"Complete"/"Active"). If NONE of the listed options reasonably matches the requested qualifier, the current page cannot satisfy it — do NOT force a wrong option; instead treat the qualifier as belonging to a different section (re-read REQUEST DECOMPOSITION step 1) or call `done` explaining the available options.',
     '  5c. TAB RULE: Elements labelled "TAB: <name>" are clickable page tabs — they switch sections/views. When asked to "show", "go to", or "open" a tab by name (e.g. "Details", "Settings", "Overview"), find the matching "TAB: <name>" element and use `click` on it. NEVER use `select` on a tab. NEVER look for a tab name inside a FILTER DROPDOWN.',
     '  5b. FILTER ALREADY DONE: If the history already shows a successful `select` action on the FILTER DROPDOWN with the requested value, do NOT repeat it. Move on to the next part of the task.',
+    '  5d. FILTER VALUE NOT AVAILABLE: If a previous `select` result contains "Available options: [...]", those are the ONLY values the dropdown accepts. Your next action MUST be ONE of: (a) `select` on the SAME FILTER DROPDOWN index using one of those EXACT listed values (you may map the requested word to an obvious synonym in the list, e.g. "approved"→"Complete", "active"→"On Progress" — only if the meaning clearly matches); or (b) `done` with a `result` that names the available options and states the requested filter value does not exist. NEVER `select` on an element that is not the FILTER DROPDOWN. NEVER invent a value that is not in the list. NEVER retry the exact same failing value.',
     '  6. KEYWORD SEARCH RULE: When asked to search by a NAME, KEYWORD, or FREE-TEXT value (e.g. "find John Smith", "search New York", "show only laptops") — that value is NOT a status. Use `input` on the "SEARCH BOX:" or "INPUT:" element with the keyword. NEVER try to `select` a free-text value from the FILTER DROPDOWN.',
     '  7. DECISION: Ask yourself — is the requested value one of the dropdown\'s own fixed options (e.g. Active/Pending/Archived)? If YES → use `select` on FILTER DROPDOWN. If NO → use `input` on the SEARCH BOX.',
     '  8. "Per-item actions menu" elements open a context menu for ONE card/row/item. They are VALID when the user asks to view, edit, open, manage, or inspect a specific item. They are NOT for page-level filtering or searching.',

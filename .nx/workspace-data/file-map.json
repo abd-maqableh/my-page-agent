@@ -221,11 +221,11 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "17869685525858569065"
+          "hash": "13486972892874986203"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "12558413954655637226"
+          "hash": "9100183941717863427"
         },
         {
           "file": "src/core/tools.ts",
@@ -233,11 +233,11 @@
         },
         {
           "file": "src/core/types.ts",
-          "hash": "10868071795945587165"
+          "hash": "606989230836341144"
         },
         {
           "file": "src/index.ts",
-          "hash": "13061941769758259300"
+          "hash": "7973968497885653950"
         },
         {
           "file": "src/llm/OpenAIClient.ts",
@@ -253,15 +253,15 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "5444200005324776736"
+          "hash": "13073322226929371450"
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "16446309857872731452"
+          "hash": "14054239700195763538"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "17988606228606038907"
+          "hash": "11887470501737142516"
         },
         {
           "file": "src/style.css",
@@ -280,7 +280,7 @@
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "9397614175325373497",
+          "hash": "17226266544872857710",
           "deps": [
             "npm:vitest"
           ]

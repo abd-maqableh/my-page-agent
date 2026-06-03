@@ -180,7 +180,14 @@ async function doSelect(
     })
 
     if (!match) {
-      throw new Error(`No option matched value "${value}" on element ${index}`)
+      const available = Array.from(selectEl.options)
+        .map((o) => o.text.replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+        .join(', ')
+      return {
+        success: false,
+        message: `No option matched "${value}" on element ${index}. Available options: [${available}]. Choose one of these EXACT values, or call done if none fits the request.`,
+      }
     }
 
     selectEl.value = match.value
@@ -212,14 +219,27 @@ async function doSelect(
     }) as HTMLElement | undefined
 
     if (!match) {
-      throw new Error(`No option matched "${value}" in dropdown for element ${index}`)
+      const optionTexts = options
+        .map((opt) => (opt.textContent ?? '').replace(/\s+/g, ' ').trim())
+        .filter(Boolean)
+      // Close the dropdown so the next observation has STABLE element indices
+      // (an open listbox re-numbers everything and confuses the model).
+      doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+      ;(el as HTMLElement).blur?.()
+      return {
+        success: false,
+        message: `The filter dropdown has no option matching "${value}". Available options: [${optionTexts.join(', ')}]. None of these is "${value}". Either select one of these EXACT values if it is a clear synonym of the request, or call done explaining that "${value}" is not an available filter value and listing the options above.`,
+      }
     }
 
     match.click()
     return { success: true, message: `Selected "${value}" from dropdown element ${index}` }
   }
 
-  throw new Error(`Element ${index} is not a <select> or combobox — cannot use select action`)
+  return {
+    success: false,
+    message: `Element ${index} is not a FILTER DROPDOWN — the select action only works on dropdown/combobox elements. To choose a filter value, target the element labelled "FILTER DROPDOWN:". If no suitable filter exists, call done.`,
+  }
 }
 
 function doScroll(

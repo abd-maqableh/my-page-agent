@@ -274,7 +274,13 @@ export interface AgentConfigBase {
   callbacks?: AgentCallbacks
   confirmAction?: (action: AgentAction) => boolean | Promise<boolean>
   targetFrame?: HTMLIFrameElement
-  pages?: Record<string, string>
+  pages?: Record<string, string | PageDescriptor>
+}
+
+export interface PageDescriptor {
+  path: string
+  sections?: string[]
+  subPages?: Record<string, string | PageDescriptor>
 }
 
 export type AgentConfig = LLMConfig & AgentConfigBase
@@ -283,7 +289,11 @@ export type AgentConfig = LLMConfig & AgentConfigBase
 - **`maxSteps`** – Hard cap on loop iterations. Default is 10. Prevents infinite loops.
 - **`confirmAction`** – A safety gate. Before executing any action, the agent calls this function if provided. If it returns `false`, the run aborts. Useful for production pages where you don't want the agent to accidentally submit a form.
 - **`targetFrame`** – If set, the agent operates inside an `<iframe>` instead of the main window. Used for split-screen demo modes.
-- **`pages`** – A name-to-path mapping for page navigation, e.g. `{ "Users": "/users" }`.
+- **`pages`** – A name-to-location mapping for navigation. Each value is **either** a plain path string (`{ "Users": "/users" }`) **or** a `PageDescriptor` object that also declares the page's in-page `sections` and nested `subPages`.
+- **`PageDescriptor`** – Rich description of a known page:
+  - **`path`** – URL path the agent navigates to.
+  - **`sections`** – Names of in-page sections (chart cards, widgets, panels) the user can scroll/jump to. They should match the on-page section headings (or `data-agent-section` attributes) so the DOM scanner can surface them as `SECTION:` landmarks after navigation. This lets the agent resolve a cross-page request like "show me Sales Performance" — it navigates to the owning page first, then scrolls to the section.
+  - **`subPages`** – Nested sub-pages reachable from this page (label → path or descriptor).
 - **`AgentConfig`** – The final config type combines LLM settings AND agent behaviour settings into one object.
 
 ---
@@ -468,14 +478,14 @@ export function buildPrompt(
   task: string,
   observation: PageObservation,
   history: AgentHistoryEntry[],
-  pages?: Record<string, string>,
+  pages?: Record<string, string | PageDescriptor>,
 ): ChatMessage[] {
 ```
 
 - **`task`** – The user's instruction (e.g. `"Fill the form with my name John and submit"`).
 - **`observation`** – The current state of the page (URL, title, element list).
 - **`history`** – What the agent has done so far in this run.
-- **`pages`** – Optional page map for navigation rules.
+- **`pages`** – Optional page map for navigation rules. Values may be plain paths or `PageDescriptor` objects (with `sections` / `subPages`).
 - Returns `ChatMessage[]` — an array ready to be sent directly to the LLM.
 
 ---
@@ -483,21 +493,24 @@ export function buildPrompt(
 ```ts
   const navigationRules: string[] = []
   if (pages && Object.keys(pages).length > 0) {
-    const pathLines = Object.entries(pages)
-      .map(([label, path]) => `       ${label.padEnd(24)} → ${path}`)
-      .join('\n')
+    const pathLines = formatPagePaths(pages)
     navigationRules.push(
       ' 11. NAVIGATION RULE: ...',
       ` 12. KNOWN PAGE PATHS — use these exact values for \`navigate\`:\n${pathLines}`,
       ' 13. COMBINED NAVIGATE + NARROW + ITEM ACTION: ...',
       ' 13b. BUTTON-VS-NAVIGATE RULE: ...',
     )
+    if (hasDeclaredSections(pages)) {
+      navigationRules.push(' 12b. CROSS-PAGE SECTION RULE: ...')
+    }
   }
 ```
 
 - **What:** Dynamically appends navigation-specific rules *only when* a page map was provided.
 - **Why:** These rules tell the LLM exactly which paths to use for `navigate` actions. Without them, the LLM would guess URLs and likely get a 404.
-- **`label.padEnd(24)`** – Pads the page name to 24 characters for aligned formatting in the prompt.
+- **`formatPagePaths(pages)`** – Helper that flattens the (possibly nested) `pages` map into aligned `label → path` lines. When a page declares `sections`, it appends an inline `[sections: A, B, C]` hint; `subPages` are rendered indented with a `↳` marker.
+- **`hasDeclaredSections(pages)`** – Recursively checks whether any page (or sub-page) declares `sections`. Only then is **Rule 12b (CROSS-PAGE SECTION RULE)** added: it tells the LLM that when the user asks for a section name, it must first `navigate` to the owning page (if not already there), then follow the SECTION FOCUS RULE (24) to `scroll` to the matching `SECTION: <name>` element — never calling `done` after only navigating.
+
 
 ---
 

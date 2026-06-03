@@ -193,7 +193,11 @@ function getLabel(el: Element): string {
 
   if (el instanceof HTMLSelectElement) {
     const sel = el.selectedOptions[0]?.textContent?.trim() ?? '(none)'
-    return `FILTER DROPDOWN: ${sel}${stateSuffix(el)}`
+    const opts = Array.from(el.options)
+      .map((o) => o.textContent?.replace(/\s+/g, ' ').trim())
+      .filter((t): t is string => !!t)
+    const optsSuffix = opts.length ? ` [options: ${opts.join(', ')}]` : ''
+    return `FILTER DROPDOWN: ${sel}${optsSuffix}${stateSuffix(el)}`
   }
 
   if (el instanceof HTMLButtonElement && el.type === 'submit') {
@@ -352,6 +356,7 @@ function findOpenModal(doc: Document): Element | null {
 export function scanInteractiveElements(
   root: ParentNode = document,
   win: Window & typeof globalThis = window,
+  declaredSections: string[] = [],
 ): ScanResult {
   const doc: Document =
     (root as Document).defaultView ? (root as Document) : ((root as Element).ownerDocument ?? document)
@@ -411,6 +416,23 @@ export function scanInteractiveElements(
     const sectionSet = new Set<Element>()
     const sections: Array<{ el: Element; name: string }> = []
 
+    // Normalize a name to its set of meaningful words for fuzzy matching.
+    const meaningfulWords = (s: string): string[] =>
+      s
+        .toLowerCase()
+        .replace(/[^a-z0-9 ]/g, ' ')
+        .split(/\s+/)
+        .filter((w) => w.length > 2 && !/^(the|and|for|section|widget|chart|panel|overview)$/.test(w))
+    const declaredWordSets = declaredSections.map((d) => ({ name: d, words: meaningfulWords(d) }))
+    // Returns the declared section name a heading matches (all declared words present), else null.
+    const matchDeclared = (headingText: string): string | null => {
+      const hWords = new Set(meaningfulWords(headingText))
+      for (const d of declaredWordSets) {
+        if (d.words.length > 0 && d.words.every((w) => hWords.has(w))) return d.name
+      }
+      return null
+    }
+
     // 1) Explicit opt-in: any element with data-agent-section="<name>"
     root.querySelectorAll('[data-agent-section]').forEach((el) => {
       if (el.closest('[data-agent-panel]')) return
@@ -420,6 +442,55 @@ export function scanInteractiveElements(
       sectionSet.add(el)
       sections.push({ el, name })
     })
+
+    const mainRootEarly =
+      (root as Element).querySelector?.('main, [role="main"]')
+      ?? root.querySelector('main, [role="main"]')
+      ?? root
+
+    // 1b) Declared sections by TITLE TEXT: section titles are often plain text
+    //     (span / p / Typography), not <h*> headings, so the heading heuristic below
+    //     would miss them. Because the developer explicitly declared these names in the
+    //     agent config, trust them: find the title element whose OWN text matches a
+    //     declared name, then surface its nearest card-like container as a SECTION.
+    if (declaredWordSets.length > 0) {
+      const ownText = (el: Element): string =>
+        Array.from(el.childNodes)
+          .filter((n) => n.nodeType === 3)
+          .map((n) => n.textContent ?? '')
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      const matchedDeclared = new Set<string>()
+      const titleCandidates = (mainRootEarly as ParentNode).querySelectorAll(
+        'h1, h2, h3, h4, h5, h6, span, strong, b, p, legend, figcaption, [class*="title" i]',
+      )
+      titleCandidates.forEach((el) => {
+        if (el.closest('[data-agent-panel]')) return
+        const text = ownText(el)
+        if (!text || text.length < 4 || text.length > 60) return
+        const declaredName = matchDeclared(text)
+        if (!declaredName || matchedDeclared.has(declaredName)) return
+        if (!isVisible(el, win)) return
+        // Resolve the nearest card-like container (reasonably tall, not the whole page).
+        let card: Element = el
+        let node: Element | null = el.parentElement
+        let hops = 0
+        const mainRect = (mainRootEarly as HTMLElement).getBoundingClientRect?.()
+        while (node && node !== mainRootEarly && node !== el.ownerDocument?.body && hops < 5) {
+          const rect = (node as HTMLElement).getBoundingClientRect()
+          const tooWide = mainRect ? rect.width > mainRect.width * 0.97 : false
+          if (rect.height >= 120 && !tooWide) { card = node; break }
+          node = node.parentElement
+          hops += 1
+        }
+        if (sectionSet.has(card)) { matchedDeclared.add(declaredName); return }
+        if (card.closest('[data-agent-panel]')) return
+        sectionSet.add(card)
+        sections.push({ el: card, name: declaredName })
+        matchedDeclared.add(declaredName)
+      })
+    }
 
     // 2) Heuristic: any element under the main content area that carries a heading
     //    AND clearly represents a content widget (chart / table / list / region). The
@@ -443,6 +514,8 @@ export function scanInteractiveElements(
       if (!name || name.length < 4) return
       if (!/[a-z]{3,}/i.test(name)) return
       if (GENERIC_NAME.test(name)) return
+      // Declared sections were already surfaced (with relaxed criteria) in pass 1b.
+      if (declaredWordSets.length > 0 && matchDeclared(name)) return
 
       // Walk up to find the smallest container that "owns" this heading: it must
       // include the heading at shallow depth AND contain a chart/table/list also at

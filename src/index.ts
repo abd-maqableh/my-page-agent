@@ -51,4 +51,4 @@ export function mountAgentPanel(config: AgentConfig, parent?: ParentNode): MyPag
   return agent
 }
 
-export type { AgentConfig, AgentRunResult, AgentHistoryEntry, LLMConfig } from './core/types'
+export type { AgentConfig, AgentRunResult, AgentHistoryEntry, LLMConfig, PageDescriptor } from './core/types'

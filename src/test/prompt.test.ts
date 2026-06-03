@@ -26,12 +26,37 @@ describe('buildPrompt', () => {
       Orders: '/dashboard/order',
     })
 
-    expect(withoutPages.content).not.toContain('KNOWN PAGE PATHS')
+    expect(withoutPages.content).not.toContain('use these exact values for')
     expect(withPages.content).toContain('KNOWN PAGE PATHS')
+    expect(withPages.content).toContain('use these exact values for')
     expect(withPages.content).toContain('Users')
     expect(withPages.content).toContain('/dashboard/user/list')
     expect(withPages.content).toContain('When the user asks ONLY to')
     expect(withPages.content).toContain('continue with those remaining steps instead of stopping')
     expect(withPages.content).toContain('COMBINED NAVIGATE + NARROW + ITEM ACTION')
+  })
+
+  it('renders declared sections inline and adds the cross-page section rule', () => {
+    const [withSections] = buildPrompt('show me Sales Performance', observation, [], {
+      Sales: { path: '/dashboard/sales', sections: ['Payout Overview', 'Sales Performance'] },
+      Orders: '/dashboard/order',
+    })
+    const [withoutSections] = buildPrompt('go to orders', observation, [], {
+      Orders: '/dashboard/order',
+    })
+
+    expect(withSections.content).toContain('[sections: Payout Overview, Sales Performance]')
+    expect(withSections.content).toContain('CROSS-PAGE SECTION RULE')
+    // The cross-page rule only appears when at least one page declares sections.
+    expect(withoutSections.content).not.toContain('CROSS-PAGE SECTION RULE')
+  })
+
+  it('flattens declared sub-pages into navigable paths', () => {
+    const [withSubPages] = buildPrompt('go to roles', observation, [], {
+      Users: { path: '/dashboard/user/list', subPages: { Roles: '/dashboard/user/role' } },
+    })
+
+    expect(withSubPages.content).toContain('/dashboard/user/role')
+    expect(withSubPages.content).toContain('Roles')
   })
 })

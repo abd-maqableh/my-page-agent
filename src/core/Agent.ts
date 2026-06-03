@@ -1,7 +1,22 @@
 import { createLLMClient } from '../llm/createLLMClient'
 import { PageController } from '../page-controller/PageController'
 import { buildPrompt } from './prompt'
-import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient } from './types'
+import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient, PageDescriptor } from './types'
+
+/** Recursively collect every declared section name from the pages config. */
+function collectDeclaredSections(pages: AgentConfig['pages']): string[] {
+  if (!pages) return []
+  const names: string[] = []
+  const walk = (map: Record<string, string | PageDescriptor>) => {
+    for (const value of Object.values(map)) {
+      if (typeof value === 'string') continue
+      if (value.sections) names.push(...value.sections)
+      if (value.subPages) walk(value.subPages)
+    }
+  }
+  walk(pages)
+  return names
+}
 
 export class Agent {
   private readonly maxSteps: number
@@ -14,7 +29,7 @@ export class Agent {
   constructor(config: AgentConfig) {
     this.maxSteps = config.maxSteps ?? 10
     this.client = createLLMClient(config)
-    this.pageController = new PageController(config.targetFrame)
+    this.pageController = new PageController(config.targetFrame, collectDeclaredSections(config.pages))
     this.callbacks = config.callbacks
     this.confirmAction = config.confirmAction
     this.pages = config.pages
@@ -26,6 +41,7 @@ export class Agent {
     }
 
     const history: AgentHistoryEntry[] = []
+    let consecutiveFailures = 0
 
     for (let step = 1; step <= this.maxSteps; step += 1) {
       this.callbacks?.onStatus?.(`Step ${step}: observing page`)
@@ -88,8 +104,26 @@ export class Agent {
       this.callbacks?.onStep?.(entry)
 
       if (!result.success) {
-        return { status: 'error', history, message: result.message }
+        // A single failed action is RECOVERABLE: feed it back to the model so it can
+        // retry with a valid value, pick a different element, or call `done` to explain
+        // why the task cannot proceed. Only abort after several consecutive failures to
+        // avoid infinite loops.
+        consecutiveFailures += 1
+        if (consecutiveFailures >= 3) {
+          // Prefer the most informative failure message (e.g. one that lists the
+          // available filter options) over the last, possibly noisy, error.
+          const informative = [...history]
+            .reverse()
+            .find((h) => !h.result.success && /Available options/i.test(h.result.message))
+          return {
+            status: 'error',
+            history,
+            message: informative?.result.message ?? result.message,
+          }
+        }
+        continue
       }
+      consecutiveFailures = 0
 
       // MENU AUTO-CLICK: if a click opened a context menu (MENU ITEMs visible, no navigation),
       // auto-click the matching item based on task intent instead of asking the model again.
