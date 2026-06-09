@@ -221,11 +221,11 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "13486972892874986203"
+          "hash": "13665483586602353556"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "9100183941717863427"
+          "hash": "8323822475206535278"
         },
         {
           "file": "src/core/tools.ts",
@@ -257,7 +257,7 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "14054239700195763538"
+          "hash": "17528809047724475594"
         },
         {
           "file": "src/page-controller/domScanner.ts",

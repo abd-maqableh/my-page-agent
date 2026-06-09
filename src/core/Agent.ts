@@ -128,6 +128,21 @@ export class Agent {
       // MENU AUTO-CLICK: if a click opened a context menu (MENU ITEMs visible, no navigation),
       // auto-click the matching item based on task intent instead of asking the model again.
       if (action.action === 'click' && !navigated) {
+
+        // EXPORT AUTO-DONE: if the clicked element's label contains an export/download keyword,
+        // treat a successful click as task completion — file downloads are async and produce no
+        // visible DOM change that the agent could observe as "success".
+        const EXPORT_RE = /\b(export|download|تصدير|تنزيل)\b/i
+        const clickedLabel = observation.elements.find((el) => el.index === action.args?.index)?.label ?? ''
+        if (result.success && EXPORT_RE.test(clickedLabel)) {
+          this.callbacks?.onStatus?.('Done')
+          return {
+            status: 'done',
+            history,
+            message: `Triggered export: ${clickedLabel.replace(/^[A-Z ]+:\s*/, '')}`,
+          }
+        }
+
         const menuItems = nextObsForUrl.elements.filter((el) => el.label.startsWith('MENU ITEM:'))
         if (menuItems.length > 0) {
           const taskLower = task.toLowerCase()
