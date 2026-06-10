@@ -1,4 +1,5 @@
 import type { PageElementSummary } from '../core/types'
+import { meaningfulWords } from '../core/text'
 
 export interface ScanResult {
   elements: PageElementSummary[]
@@ -154,6 +155,43 @@ function ariaLabelledByText(el: Element): string {
     .join(' ')
 }
 
+/**
+ * Resolve the FIELD NAME (e.g. "Region", "Request Status") for a form control.
+ * Without this, custom dropdowns (MUI Select/Autocomplete, antd, react-select)
+ * surface only their CURRENT VALUE ("All") and the LLM cannot tell which filter
+ * the control represents. Checks label[for=id], a wrapping <label>, then nearby
+ * <label> elements inside ancestor form-control wrappers (the MUI pattern where
+ * the label is a sibling of the input wrapper).
+ */
+function fieldNameFor(el: Element): string {
+  const doc = el.ownerDocument
+  const id = el.getAttribute('id')
+  if (id && doc) {
+    try {
+      const lbl = doc.querySelector(`label[for="${CSS.escape(id)}"]`)
+      const t = lbl?.textContent?.replace(/\s+/g, ' ').trim()
+      if (t) return t
+    } catch {
+      /* invalid selector chars in id */
+    }
+  }
+  const wrapping = el.closest('label')
+  if (wrapping) {
+    const clone = wrapping.cloneNode(true) as HTMLElement
+    clone.querySelectorAll('select, input, textarea').forEach((child) => child.remove())
+    const t = clone.textContent?.replace(/\s+/g, ' ').trim()
+    if (t) return t
+  }
+  let node: Element | null = el.parentElement
+  for (let depth = 0; node && depth < 4; depth += 1, node = node.parentElement) {
+    const lbl = node.querySelector('label, [class*="FormLabel"], [class*="form-label"]')
+    const t = lbl?.textContent?.replace(/\s+/g, ' ').trim()
+    if (t) return t
+    if (node.tagName === 'FORM') break
+  }
+  return ''
+}
+
 function getLabel(el: Element): string {
   const aria = el.getAttribute('aria-label')?.trim()
   const labelledBy = ariaLabelledByText(el)
@@ -163,13 +201,26 @@ function getLabel(el: Element): string {
   // Native inputs
   if (el instanceof HTMLInputElement) {
     const prefix = getInputPrefix(el)
-    let txt = baseText
-    if (!txt && el.labels?.length) {
-      txt = Array.from(el.labels).map((l) => l.textContent?.trim()).filter(Boolean).join(' ')
+    let labelTxt = baseText
+    if (!labelTxt && el.labels?.length) {
+      labelTxt = Array.from(el.labels).map((l) => l.textContent?.trim()).filter(Boolean).join(' ')
     }
+    let txt = labelTxt
     if (!txt && el.placeholder?.trim()) txt = el.placeholder.trim()
     if (!txt && el.name) txt = el.name
     if (prefix) return `${prefix}: ${txt || el.type}${stateSuffix(el)}`
+    // Dropdown rendered as an <input> (MUI Autocomplete, downshift, react-select):
+    // expose the FIELD NAME + current value so the LLM knows which filter this is.
+    const isComboInput =
+      el.getAttribute('role') === 'combobox' ||
+      el.getAttribute('aria-haspopup') === 'listbox' ||
+      !!el.getAttribute('aria-autocomplete')
+    if (isComboInput) {
+      const field = labelTxt || fieldNameFor(el)
+      const current = el.value?.trim() || el.placeholder?.trim() || ''
+      const currentSuffix = current && current !== field ? ` (current: ${current})` : ''
+      return `FILTER DROPDOWN: ${field || txt || 'select option'}${currentSuffix}${stateSuffix(el)}`
+    }
     // Masked date input (type="text" with date placeholder, e.g. MUI X DatePicker)
     const dateFormat = detectDateFormat(el)
     if (dateFormat) {
@@ -197,7 +248,13 @@ function getLabel(el: Element): string {
       .map((o) => o.textContent?.replace(/\s+/g, ' ').trim())
       .filter((t): t is string => !!t)
     const optsSuffix = opts.length ? ` [options: ${opts.join(', ')}]` : ''
-    return `FILTER DROPDOWN: ${sel}${optsSuffix}${stateSuffix(el)}`
+    let field = baseText
+    if (!field && el.labels?.length) {
+      field = Array.from(el.labels).map((l) => l.textContent?.trim()).filter(Boolean).join(' ')
+    }
+    if (!field) field = fieldNameFor(el)
+    const head = field && field !== sel ? `${field} (current: ${sel})` : sel
+    return `FILTER DROPDOWN: ${head}${optsSuffix}${stateSuffix(el)}`
   }
 
   if (el instanceof HTMLButtonElement && el.type === 'submit') {
@@ -214,8 +271,10 @@ function getLabel(el: Element): string {
   }
 
   if (role === 'combobox') {
-    const text = baseText || (el.textContent ?? '').replace(/\s+/g, ' ').trim()
-    return `FILTER DROPDOWN: ${text || 'select option'}${stateSuffix(el)}`
+    const text = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
+    const field = baseText || fieldNameFor(el)
+    const currentSuffix = field && text && !field.includes(text) ? ` (current: ${text})` : ''
+    return `FILTER DROPDOWN: ${field || text || 'select option'}${currentSuffix}${stateSuffix(el)}`
   }
 
   if (role === 'searchbox') {
@@ -416,13 +475,7 @@ export function scanInteractiveElements(
     const sectionSet = new Set<Element>()
     const sections: Array<{ el: Element; name: string }> = []
 
-    // Normalize a name to its set of meaningful words for fuzzy matching.
-    const meaningfulWords = (s: string): string[] =>
-      s
-        .toLowerCase()
-        .replace(/[^a-z0-9 ]/g, ' ')
-        .split(/\s+/)
-        .filter((w) => w.length > 2 && !/^(the|and|for|section|widget|chart|panel|overview)$/.test(w))
+    // Meaningful-word matching is Unicode/Arabic-aware (shared core/text helper).
     const declaredWordSets = declaredSections.map((d) => ({ name: d, words: meaningfulWords(d) }))
     // Returns the declared section name a heading matches (all declared words present), else null.
     const matchDeclared = (headingText: string): string | null => {
@@ -502,17 +555,14 @@ export function scanInteractiveElements(
     //      - contains a chart / table / list (rules out pure text or stat cards)
     //      - is NOT nested inside another already-selected section
     //      - the heading text is meaningful (not a pure number or a single generic word)
-    const mainRoot =
-      (root as Element).querySelector?.('main, [role="main"]')
-      ?? root.querySelector('main, [role="main"]')
-      ?? root
+    const mainRoot = mainRootEarly
     const headings = (mainRoot as ParentNode).querySelectorAll('h1, h2, h3, h4, h5, h6')
     const GENERIC_NAME = /^(total|amount|count|value|status|date|new|all|other|none|n\/a)$/i
     headings.forEach((heading) => {
       if (heading.closest('[data-agent-panel]')) return
       const name = heading.textContent?.replace(/\s+/g, ' ').trim()
       if (!name || name.length < 4) return
-      if (!/[a-z]{3,}/i.test(name)) return
+      if (!/\p{L}{2,}/u.test(name)) return
       if (GENERIC_NAME.test(name)) return
       // Declared sections were already surfaced (with relaxed criteria) in pass 1b.
       if (declaredWordSets.length > 0 && matchDeclared(name)) return

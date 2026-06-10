@@ -31,6 +31,45 @@ export class PageController {
     }
   }
 
+  /** Cheap URL read without re-scanning the DOM. */
+  getUrl(): string {
+    return this.getDocWin().win.location.href
+  }
+
+  /**
+   * Wait until the DOM is quiet: resolves as soon as no mutations occur for
+   * `idleMs`, capped at `maxMs`. Much faster than a fixed sleep on quick pages
+   * and more reliable on slow ones (async renders, React portals).
+   */
+  waitForStability(idleMs = 180, maxMs = 1500): Promise<void> {
+    const { doc, win } = this.getDocWin()
+    return new Promise((resolve) => {
+      let idleTimer: number
+      const finish = () => {
+        observer.disconnect()
+        win.clearTimeout(idleTimer)
+        win.clearTimeout(maxTimer)
+        resolve()
+      }
+      const observer = new win.MutationObserver(() => {
+        win.clearTimeout(idleTimer)
+        idleTimer = win.setTimeout(finish, idleMs)
+      })
+      const maxTimer = win.setTimeout(finish, maxMs)
+      idleTimer = win.setTimeout(finish, idleMs)
+      try {
+        observer.observe(doc.body ?? doc.documentElement, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+          characterData: true,
+        })
+      } catch {
+        finish()
+      }
+    })
+  }
+
   async executeAction(action: AgentAction): Promise<ActionExecutionResult> {
     const { doc, win } = this.getDocWin()
     return runAction(action, this.elementMap, doc, win)

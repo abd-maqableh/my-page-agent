@@ -1,4 +1,5 @@
 import type { ActionExecutionResult, AgentAction } from "../core/types";
+import { normalizeText } from "../core/text";
 
 /** Poll until a DOM element matching selector appears, or timeoutMs elapses. */
 function waitForElement(
@@ -24,12 +25,12 @@ function findByText(
   query: string,
   elementMap: Map<number, Element>,
 ): Element | undefined {
-  const normalized = query.replace(/^a/, "").trim().toLowerCase();
+  const normalized = normalizeText(query);
+  if (!normalized) return undefined;
   for (const el of elementMap.values()) {
-    const label = (el.getAttribute("aria-label") ?? el.textContent ?? "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
+    const label = normalizeText(
+      el.getAttribute("aria-label") ?? el.textContent ?? "",
+    );
     if (label === normalized || label.includes(normalized)) return el;
   }
   return undefined;
@@ -233,10 +234,10 @@ async function doSelect(
   // Native <select>
   if (el.tagName.toLowerCase() === "select") {
     const selectEl = el as HTMLSelectElement;
-    const normalizedQuery = value.toLowerCase();
+    const normalizedQuery = normalizeText(value);
     const match = Array.from(selectEl.options).find((option) => {
-      const optText = option.text.toLowerCase();
-      const optValue = option.value.toLowerCase();
+      const optText = normalizeText(option.text);
+      const optValue = normalizeText(option.value);
       return (
         optText === normalizedQuery ||
         optValue === normalizedQuery ||
@@ -300,19 +301,34 @@ async function doSelect(
       throw new Error(`Dropdown did not open for element ${index}`);
     }
 
+    const normalizedValue = normalizeText(value);
+    const findOption = (): HTMLElement | undefined =>
+      (Array.from(doc.querySelectorAll('[role="option"]')) as HTMLElement[]).find((opt) => {
+        const text = normalizeText(opt.textContent ?? "");
+        return (
+          text === normalizedValue ||
+          text.includes(normalizedValue) ||
+          normalizedValue.includes(text)
+        );
+      });
+
+    let match = findOption();
+
+    // Autocomplete-style comboboxes (MUI Autocomplete, react-select) filter the
+    // option list by the input's current text — the wanted option may be hidden
+    // until we type it. Retype the value and re-query before giving up.
+    if (!match && el instanceof win.HTMLInputElement) {
+      const setter = Object.getOwnPropertyDescriptor(
+        win.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(el, value);
+      el.dispatchEvent(new win.Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      match = findOption();
+    }
+
     const options = Array.from(doc.querySelectorAll('[role="option"]'));
-    const normalizedValue = value.toLowerCase();
-    const match = options.find((opt) => {
-      const text = (opt.textContent ?? "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .toLowerCase();
-      return (
-        text === normalizedValue ||
-        text.includes(normalizedValue) ||
-        normalizedValue.includes(text)
-      );
-    }) as HTMLElement | undefined;
 
     if (!match) {
       const optionTexts = options
@@ -424,8 +440,21 @@ async function doNavigate(
 ): Promise<ActionExecutionResult> {
   if (!url) throw new Error("Missing required arg: url");
   win.location.href = url;
-  // Wait for the SPA/page to start loading and settle
-  await new Promise((resolve) => setTimeout(resolve, 1800));
+  // Wait until the (possibly replaced) document reports ready, instead of a
+  // long fixed sleep. Resolves early on fast SPAs, caps at 4s on slow loads.
+  const deadline = Date.now() + 4000;
+  // Give the navigation a moment to actually start (readyState flips to "loading").
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  while (Date.now() < deadline) {
+    try {
+      if (win.document.readyState === "complete") break;
+    } catch {
+      /* document may be mid-swap in an iframe — keep polling */
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  // Small grace period for the SPA router/first render to settle.
+  await new Promise((resolve) => setTimeout(resolve, 350));
   return { success: true, message: `Navigated to ${url}` };
 }
 

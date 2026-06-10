@@ -221,11 +221,19 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "13665483586602353556"
+          "hash": "3272852703608907909"
+        },
+        {
+          "file": "src/core/intentRouter.ts",
+          "hash": "14532843521747288428"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "8323822475206535278"
+          "hash": "10095191757330721372"
+        },
+        {
+          "file": "src/core/text.ts",
+          "hash": "15206748292557477675"
         },
         {
           "file": "src/core/tools.ts",
@@ -253,15 +261,15 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "13073322226929371450"
+          "hash": "15409280126996992217"
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "17528809047724475594"
+          "hash": "5231418348479564021"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "11887470501737142516"
+          "hash": "2321224787976878436"
         },
         {
           "file": "src/style.css",
@@ -270,6 +278,13 @@
         {
           "file": "src/test/admin-yallgo.code-workspace",
           "hash": "17456431352775212755"
+        },
+        {
+          "file": "src/test/intent-router.test.ts",
+          "hash": "3795771309978208962",
+          "deps": [
+            "npm:vitest"
+          ]
         },
         {
           "file": "src/test/openai-client.test.ts",

@@ -1,7 +1,12 @@
 import { createLLMClient } from '../llm/createLLMClient'
 import { PageController } from '../page-controller/PageController'
 import { buildPrompt } from './prompt'
-import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient, PageDescriptor } from './types'
+import { isOnPath, resolveIntent } from './intentRouter'
+import { looseMatch } from './text'
+import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient, PageDescriptor, PageObservation } from './types'
+
+const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
+const EXPORT_RE = /\b(export|download|تصدير|تنزيل)\b/i
 
 /** Recursively collect every declared section name from the pages config. */
 function collectDeclaredSections(pages: AgentConfig['pages']): string[] {
@@ -41,6 +46,76 @@ export class Agent {
     }
 
     const history: AgentHistoryEntry[] = []
+
+    // ── Deterministic prefix ────────────────────────────────────────
+    // Resolve "show/open <known page or declared section>" requests without
+    // the LLM: navigate (and scroll to the section) directly. When qualifier
+    // words remain (e.g. "sent applications"), only the navigation happens
+    // here and the LLM loop finishes the rest — faster and far more reliable.
+    const prefixResult = await this.runDeterministicPrefix(task, history)
+    if (prefixResult) return prefixResult
+
+    return this.runLLMLoop(task, history)
+  }
+
+  private async runDeterministicPrefix(
+    task: string,
+    history: AgentHistoryEntry[],
+  ): Promise<AgentRunResult | null> {
+    const routed = resolveIntent(task, this.pages)
+    if (!routed) return null
+
+    const currentUrl = this.pageController.getUrl()
+    const needsNavigation = !isOnPath(currentUrl, routed.path)
+
+    if (needsNavigation) {
+      this.callbacks?.onStatus?.(`Navigating to ${routed.label}`)
+      const action = { action: 'navigate' as const, args: { url: routed.path }, thought: `Known page "${routed.label}"` }
+      if (this.confirmAction && !(await this.confirmAction(action))) {
+        return { status: 'error', history, message: 'Action "navigate" was rejected by confirmAction.' }
+      }
+      const result = await this.pageController.executeAction(action)
+      const entry: AgentHistoryEntry = { step: 0, observation: '', action, result }
+      history.push(entry)
+      this.callbacks?.onStep?.(entry)
+      if (!result.success) return null // fall back to the LLM loop
+      await this.pageController.waitForStability()
+    }
+
+    let sectionFocused = false
+    if (routed.section) {
+      const observation = this.pageController.observe()
+      const target = observation.elements.find(
+        (el) => el.label.startsWith('SECTION:') && looseMatch(el.label.slice('SECTION:'.length), routed.section as string),
+      )
+      if (target) {
+        this.callbacks?.onStatus?.(`Focusing section ${routed.section}`)
+        const action = { action: 'scroll' as const, args: { index: target.index }, thought: `Declared section "${routed.section}"` }
+        const result = await this.pageController.executeAction(action)
+        const entry: AgentHistoryEntry = { step: 0.5, observation: observation.elementsText, action, result }
+        history.push(entry)
+        this.callbacks?.onStep?.(entry)
+        sectionFocused = result.success
+      }
+    }
+
+    if (routed.complete && (!routed.section || sectionFocused)) {
+      this.callbacks?.onStatus?.('Done')
+      const suffix = routed.section ? ` — focused "${routed.section}"` : ''
+      return {
+        status: 'done',
+        history,
+        message: needsNavigation || routed.section
+          ? `Navigated to ${routed.path}${suffix}`
+          : `Already on ${routed.label} (${routed.path})`,
+      }
+    }
+
+    // Qualifier words remain (or the section wasn't found) — let the LLM finish.
+    return null
+  }
+
+  private async runLLMLoop(task: string, history: AgentHistoryEntry[]): Promise<AgentRunResult> {
     let consecutiveFailures = 0
 
     for (let step = 1; step <= this.maxSteps; step += 1) {
@@ -78,17 +153,18 @@ export class Agent {
 
       const result = await this.pageController.executeAction(action)
 
-      // Give the page time to settle (e.g. React portals, async renders) before next observe()
+      // Let the page settle (React portals, async renders) — resolves as soon
+      // as the DOM goes quiet instead of a fixed sleep.
       if (action.action === 'click' || action.action === 'input' || action.action === 'select') {
-        await new Promise<void>((resolve) => setTimeout(resolve, 600))
+        await this.pageController.waitForStability()
       }
 
-      // Detect URL changes caused by this action and annotate the result
-      const nextObsForUrl = this.pageController.observe()
-      const nextUrl = nextObsForUrl.url
+      // URL-change detection. Only clicks need a full re-scan (menu detection);
+      // every other action gets a cheap URL read.
+      const postClickObs: PageObservation | null = action.action === 'click' ? this.pageController.observe() : null
+      const nextUrl = postClickObs?.url ?? this.pageController.getUrl()
       const navigated = action.action === 'click' && nextUrl !== prevUrl
       // Consider it a "detail page navigation" if the new URL contains a UUID (list → detail)
-      const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i
       const navigatedToDetail = navigated && UUID_RE.test(nextUrl) && !UUID_RE.test(prevUrl)
       const annotatedResult = navigated
         ? { ...result, message: `${result.message} → navigated to ${nextUrl}` }
@@ -127,12 +203,11 @@ export class Agent {
 
       // MENU AUTO-CLICK: if a click opened a context menu (MENU ITEMs visible, no navigation),
       // auto-click the matching item based on task intent instead of asking the model again.
-      if (action.action === 'click' && !navigated) {
+      if (action.action === 'click' && !navigated && postClickObs) {
 
         // EXPORT AUTO-DONE: if the clicked element's label contains an export/download keyword,
         // treat a successful click as task completion — file downloads are async and produce no
         // visible DOM change that the agent could observe as "success".
-        const EXPORT_RE = /\b(export|download|تصدير|تنزيل)\b/i
         const clickedLabel = observation.elements.find((el) => el.index === action.args?.index)?.label ?? ''
         if (result.success && EXPORT_RE.test(clickedLabel)) {
           this.callbacks?.onStatus?.('Done')
@@ -143,7 +218,7 @@ export class Agent {
           }
         }
 
-        const menuItems = nextObsForUrl.elements.filter((el) => el.label.startsWith('MENU ITEM:'))
+        const menuItems = postClickObs.elements.filter((el) => el.label.startsWith('MENU ITEM:'))
         if (menuItems.length > 0) {
           const taskLower = task.toLowerCase()
           const isViewIntent = /\b(view|open|see|show|details?|look)\b/.test(taskLower)
@@ -155,16 +230,16 @@ export class Agent {
 
           this.callbacks?.onStatus?.(`Step ${step}: auto-clicking ${target.label}`)
           const menuResult = await this.pageController.executeAction({ action: 'click', args: { index: target.index } })
-          await new Promise<void>((resolve) => setTimeout(resolve, 800))
+          await this.pageController.waitForStability()
 
-          const afterMenuUrl = this.pageController.observe().url
+          const afterMenuUrl = this.pageController.getUrl()
           const menuNavigated = afterMenuUrl !== nextUrl
           const menuNavigatedToDetail =
             menuNavigated && UUID_RE.test(afterMenuUrl) && !UUID_RE.test(nextUrl)
 
           const menuEntry: AgentHistoryEntry = {
             step: step + 0.5,
-            observation: nextObsForUrl.elementsText,
+            observation: postClickObs.elementsText,
             action: { action: 'click', args: { index: target.index }, thought: `Auto-clicked ${target.label}` },
             result: menuNavigated
               ? { ...menuResult, message: `${menuResult.message} → navigated to ${afterMenuUrl}` }
