@@ -220,6 +220,10 @@
           "hash": "12690649164411559435"
         },
         {
+          "file": "skills/agent-friendly-markup/SKILL.md",
+          "hash": "12816815647573660371"
+        },
+        {
           "file": "src/core/Agent.ts",
           "hash": "3272852703608907909"
         },
@@ -249,7 +253,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "13063055441767711484"
+          "hash": "11265585126727579193"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -261,7 +265,7 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "15409280126996992217"
+          "hash": "10560784081248225978"
         },
         {
           "file": "src/page-controller/actions.ts",

@@ -93,7 +93,15 @@ export class OpenAIClient implements LLMClient {
 
   async getNextAction(messages: ChatMessage[]): Promise<AgentAction> {
     const baseURL = this.config.baseURL.replace(/\/$/, '')
-    const response = await fetch(`${baseURL}/chat/completions`, {
+    const url = `${baseURL}/chat/completions`
+
+    console.group(`%c[PageAgent] LLM call → ${url}`, 'color:#6366f1;font-weight:bold')
+    console.log('model:', this.config.model)
+    console.log('messages:', messages)
+    console.groupEnd()
+
+    const t0 = performance.now()
+    const response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -107,16 +115,24 @@ export class OpenAIClient implements LLMClient {
     })
 
     const data = (await response.json()) as ChatCompletionsResponse
+    const ms = Math.round(performance.now() - t0)
 
     if (!response.ok) {
+      console.error(`%c[PageAgent] LLM error (${response.status}) in ${ms}ms`, 'color:red', data)
       throw new Error(data.error?.message ?? `LLM request failed with status ${response.status}`)
     }
 
     const content = data.choices?.[0]?.message?.content
+    console.group(`%c[PageAgent] LLM response ✓ (${ms}ms)`, 'color:#22c55e;font-weight:bold')
+    console.log('raw:', content)
+    console.groupEnd()
+
     if (!content) {
       throw new Error('LLM did not return message content.')
     }
 
-    return parseAgentActionResponse(content)
+    const action = parseAgentActionResponse(content)
+    console.log('%c[PageAgent] action →', 'color:#f59e0b;font-weight:bold', action)
+    return action
   }
 }
