@@ -64,6 +64,7 @@ export function buildPrompt(
   observation: PageObservation,
   history: AgentHistoryEntry[],
   pages?: PagesMap,
+  singleCallMode = false,
 ): ChatMessage[] {
   const navigationRules: string[] = []
   if (pages && Object.keys(pages).length > 0) {
@@ -108,6 +109,13 @@ export function buildPrompt(
     '  - BATCHING RULE: You MAY return SEVERAL actions in ONE response using the "actions" array, and the agent runs them in order WITHOUT calling you again. This saves round-trips — prefer it when you can already see every element you need in the CURRENT elements list. Only batch actions whose "index" is ALREADY in the current list and that do NOT depend on an earlier action changing the page first.',
     '  - BATCH-SAFE actions (chain as many as you need, then finish): `select`, `input`, `clear`, `scroll`, `hover`, `press_key`, plus a final `done`. Their indexes stay valid because they do not renumber the page.',
     '  - BATCH-STOP actions: `navigate`, and EVERY `click` (a click may open a menu/dialog or load a new page and RENUMBER all indexes). A `navigate` or `click` MUST be the LAST action in the array — never put another action after it. If unsure whether later indexes survive, return just ONE action and you will be asked again after the page updates.',
+    ...(singleCallMode
+      ? [
+          '  - SINGLE-CALL MODE: You will be called only once for this task. Return the full action plan from the current observation so the task can finish without another model call.',
+          '  - In single-call mode, prefer one `actions` array that includes all needed fills/selects and exactly one final submit/click/done flow if applicable.',
+          '  - Never emit repeated identical clicks, especially repeated submit clicks.',
+        ]
+      : []),
     '=== TASK DECOMPOSITION ===',
     '  - REQUEST DECOMPOSITION RULE: A request such as "show me <qualifier> <entity>" (e.g. "show approved orders", "active users", "pending requests", "laptops in products") combines TWO parts: (a) a TARGET SECTION = the entity noun (orders / users / requests / products) and (b) a QUALIFIER = the adjective, status, or keyword (approved / active / pending / laptops). Resolve them strictly in this order:\n      step 1 — LOCATE THE SECTION: compare the entity noun against the CURRENT Page title/URL. If they already match (you are on that section), do NOT navigate — skip to step 2. If they do NOT match, get onto that section first: use `navigate` if the entity matches a KNOWN PAGE PATHS label, otherwise `click` a sidebar/nav link whose label matches the entity.\n      step 2 — APPLY THE QUALIFIER on that page: if the qualifier is one of a FILTER DROPDOWN\'s fixed options, use the STATUS FILTER RULE (`select`); if it is free text, use the KEYWORD SEARCH RULE (`input`).\n      Never apply the qualifier before you are on the correct section, and never call `done` after only navigating if a qualifier still needs to be applied. Do NOT assume the qualifier requires a brand-new page when a FILTER DROPDOWN or SEARCH BOX on the current page can satisfy it.',
     '  - CROSS-PAGE NAVIGATION: If the task says "in <section>" or "on <page>" (e.g. "in orders", "in settings", "on the users page") and the current page URL/title does NOT match that section, you MUST navigate there first. Find a sidebar/nav link whose label matches the section name and `click` it. Only after landing on the correct page should you look for tabs, filters, or items.',

@@ -468,4 +468,70 @@ describe('agent scenarios', () => {
     // The whole batch ran from ONE API round-trip.
     expect(client.calls).toBe(1)
   })
+
+  it('single-call mode applies task-named filters deterministically even if the model returns a stray action', async () => {
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 240,
+        bottom: 48,
+        width: 240,
+        height: 48,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+
+    document.body.innerHTML = `
+      <main>
+        <label>
+          Request Type
+          <select>
+            <option>All</option>
+            <option>Mining License</option>
+            <option>Exploration License</option>
+          </select>
+        </label>
+        <label>
+          Region
+          <select>
+            <option>All</option>
+            <option>Northern</option>
+            <option>Southern</option>
+            <option>Central</option>
+          </select>
+        </label>
+        <button type="button">Reset</button>
+      </main>
+    `
+
+    // Mirrors the reported bug: a terse single-call model returns ONE useless
+    // click instead of selecting the two requested filters. The deterministic
+    // pre/post passes must still apply BOTH "Mining License" and "Southern".
+    const client = new CountingScriptedLLMClient([
+      { thought: 'guessing', action: 'click', args: { index: 3 } },
+    ])
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      singleLLMCall: true,
+      maxSteps: 4,
+    })
+
+    const result = await agent.execute('Show me the Mining License of Southern on government followup page')
+    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
+
+    expect(result.status).toBe('done')
+    expect(selects[0].value).toBe('Mining License')
+    expect(selects[1].value).toBe('Southern')
+    // Exactly ONE model round-trip — the filters were applied without the model.
+    expect(client.calls).toBe(1)
+  })
 })

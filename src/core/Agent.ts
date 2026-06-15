@@ -91,6 +91,7 @@ export class Agent {
   private readonly callbacks?: AgentConfig['callbacks']
   private readonly confirmAction?: AgentConfig['confirmAction']
   private readonly pages?: AgentConfig['pages']
+  private readonly singleLLMCall: boolean
 
   constructor(config: AgentConfig) {
     this.maxSteps = config.maxSteps ?? 10
@@ -99,6 +100,7 @@ export class Agent {
     this.callbacks = config.callbacks
     this.confirmAction = config.confirmAction
     this.pages = config.pages
+    this.singleLLMCall = config.singleLLMCall ?? false
   }
 
   async execute(task: string): Promise<AgentRunResult> {
@@ -180,6 +182,76 @@ export class Agent {
     const failureRef = { count: 0 }
     const verifyRef = { count: 0 }
     const MAX_BATCH = 6
+
+    if (this.singleLLMCall) {
+      // ── PRE-PASS: deterministic filter completion (no model call) ──
+      // Apply any FILTER DROPDOWN values the task literally names. This closes the
+      // LLM↔DOM gap for filter tasks WITHOUT a model round-trip: `selectOnDropdown`
+      // self-validates, so a value is only applied when one of THAT dropdown's own
+      // options matches a task word. With filters already set, the single model
+      // call below only has to confirm/finish — it can no longer fire stray clicks.
+      const preApplied = await this.completeTaskFiltersDeterministically(task, 1, history)
+
+      this.callbacks?.onStatus?.('Step 1: observing page')
+      const observation = this.pageController.observe()
+
+      this.callbacks?.onStatus?.('Step 1: asking model')
+      const messages = buildPrompt(task, observation, history, this.pages, true)
+
+      let actions: AgentAction[]
+      try {
+        actions = await this.client.getNextActions(messages)
+      } catch (error) {
+        // The deterministic pass may already have satisfied the request — don't
+        // hard-fail the run if we managed to apply at least one filter.
+        if (preApplied > 0) {
+          return { status: 'done', history, message: 'Applied requested filters.' }
+        }
+        return {
+          status: 'error',
+          history,
+          message: error instanceof Error ? error.message : 'Failed to get model action',
+        }
+      }
+
+      if (actions.length === 0) {
+        if (preApplied > 0) {
+          return { status: 'done', history, message: 'Applied requested filters.' }
+        }
+        return { status: 'error', history, message: 'Model returned no actions.' }
+      }
+
+      // Execute the model's plan, but DEFER a bare `done` so the post-pass can still
+      // apply anything the model skipped before we accept completion.
+      let terminal: AgentRunResult | null = null
+      let modelActed = false
+      const batch = actions.slice(0, MAX_BATCH)
+      for (let j = 0; j < batch.length; j += 1) {
+        const action = batch[j]
+        if (action.action === 'done') continue
+        modelActed = true
+        const outcome = await this.runAction(task, action, observation, 2 + j * 0.1, history, failureRef, verifyRef)
+        if (outcome.type === 'return') { terminal = outcome.result; break }
+        if (outcome.type === 'break') break
+      }
+      if (terminal) return terminal
+
+      // ── POST-PASS: only if the model changed the page, catch any newly
+      // revealed filters the model left unset. Skipped for pure filter tasks
+      // (model returned done) to avoid redundant dropdown work.
+      const postApplied = modelActed
+        ? await this.completeTaskFiltersDeterministically(task, 3, history)
+        : 0
+
+      return {
+        status: 'done',
+        history,
+        message:
+          preApplied + postApplied > 0
+            ? 'Applied requested filters.'
+            : 'Executed one-call plan.',
+      }
+    }
 
     for (let step = 1; step <= this.maxSteps; step += 1) {
       this.callbacks?.onStatus?.(`Step ${step}: observing page`)
@@ -452,5 +524,72 @@ export class Agent {
 
     // No unset dropdown could satisfy the leftover words → accept the model's done.
     return null
+  }
+
+  /**
+   * Deterministically apply FILTER DROPDOWN values that the task literally names.
+   * Project-agnostic and model-free: for every still-unset dropdown it attempts a
+   * real `select(index, task)`. `selectOnDropdown` self-validates — it only changes
+   * state when one of THAT dropdown's own options matches a word in the task — so
+   * unrelated dropdowns are left untouched (e.g. a status word never lands in a
+   * region field). Re-observes after each successful select (indexes may shift)
+   * and stops when no further filter can be applied. Returns how many filters were
+   * set so callers can report or skip the model call accordingly.
+   *
+   * This is what closes the LLM↔DOM gap for filter tasks: instead of relying on a
+   * terse model to map "mining license" → the right dropdown, the dropdown's own
+   * options decide the match — no domain vocabulary, no extra API calls.
+   */
+  private async completeTaskFiltersDeterministically(
+    task: string,
+    startStep: number,
+    history: AgentHistoryEntry[],
+  ): Promise<number> {
+    const MAX_PASSES = 6
+    const tried = new Set<string>()
+    let applied = 0
+    let micro = startStep
+
+    for (let pass = 0; pass < MAX_PASSES; pass += 1) {
+      const observation = this.pageController.observe()
+      const unset = observedFilters(observation).filter(
+        (f) => isNeutralFilterValue(f.current) && !tried.has(f.field || `#${f.index}`),
+      )
+      if (unset.length === 0) break
+
+      let appliedThisPass = false
+      for (const f of unset) {
+        // Never retry the same dropdown — a failed combobox attempt opens/closes a
+        // portal, so repeating it would cause visible flicker for no benefit.
+        tried.add(f.field || `#${f.index}`)
+
+        const action: AgentAction = {
+          action: 'select',
+          args: { index: f.index, value: task },
+          thought: 'Apply requested filter value from task',
+        }
+        if (this.confirmAction && !(await this.confirmAction(action))) continue
+
+        const result = await this.pageController.executeAction(action)
+        await this.pageController.waitForStability()
+        if (!result.success) continue
+
+        micro += 0.1
+        const entry: AgentHistoryEntry = {
+          step: Number(micro.toFixed(2)),
+          observation: observation.elementsText,
+          action,
+          result,
+        }
+        history.push(entry)
+        this.callbacks?.onStep?.(entry)
+        applied += 1
+        appliedThisPass = true
+        break // a successful select can renumber indexes → re-observe
+      }
+      if (!appliedThisPass) break
+    }
+
+    return applied
   }
 }

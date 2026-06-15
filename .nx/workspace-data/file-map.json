@@ -225,7 +225,7 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "13596604046786914580"
+          "hash": "10134376556242058390"
         },
         {
           "file": "src/core/intentRouter.ts",
@@ -233,7 +233,7 @@
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "6484916328488757263"
+          "hash": "10603988669904186960"
         },
         {
           "file": "src/core/text.ts",
@@ -245,7 +245,7 @@
         },
         {
           "file": "src/core/types.ts",
-          "hash": "8989058073155363838"
+          "hash": "11395967920086266618"
         },
         {
           "file": "src/index.ts",
@@ -273,7 +273,7 @@
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "5102396860024074450"
+          "hash": "2098637059840518528"
         },
         {
           "file": "src/style.css",
