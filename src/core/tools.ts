@@ -52,3 +52,35 @@ export function normalizeAction(input: unknown): AgentAction {
     args,
   }
 }
+
+/**
+ * Normalize a model response into a LIST of actions. Supports the three shapes a
+ * model may emit:
+ *   1. a single action object:            {"action":"select","args":{...}}
+ *   2. an object with an "actions" array: {"thought":"...","actions":[{...},{...}]}
+ *   3. a bare array of action objects:    [{"action":"select",...},{...}]
+ * A top-level "thought" is propagated to any batched action that lacks its own.
+ */
+export function normalizeActions(input: unknown): AgentAction[] {
+  if (Array.isArray(input)) {
+    return input.map((item) => normalizeAction(item))
+  }
+
+  if (input && typeof input === 'object' && Array.isArray((input as Record<string, unknown>).actions)) {
+    const obj = input as Record<string, unknown>
+    const sharedThought = typeof obj.thought === 'string' ? obj.thought : undefined
+    return (obj.actions as unknown[]).map((item) => {
+      if (
+        sharedThought &&
+        item &&
+        typeof item === 'object' &&
+        !('thought' in (item as Record<string, unknown>))
+      ) {
+        return normalizeAction({ thought: sharedThought, ...(item as Record<string, unknown>) })
+      }
+      return normalizeAction(item)
+    })
+  }
+
+  return [normalizeAction(input)]
+}

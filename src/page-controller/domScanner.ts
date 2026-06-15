@@ -248,11 +248,22 @@ function getLabel(el: Element): string {
       .map((o) => o.textContent?.replace(/\s+/g, ' ').trim())
       .filter((t): t is string => !!t)
     const optsSuffix = opts.length ? ` [options: ${opts.join(', ')}]` : ''
+    // Derive the FIELD NAME without dumping every option into it. `fieldNameFor`
+    // cleans wrapping <label> text (strips child select/option text); a raw
+    // `el.labels` join would otherwise pull in the whole option list, duplicating
+    // `[options: ...]` and wasting prompt tokens.
     let field = baseText
-    if (!field && el.labels?.length) {
-      field = Array.from(el.labels).map((l) => l.textContent?.trim()).filter(Boolean).join(' ')
-    }
     if (!field) field = fieldNameFor(el)
+    if (!field && el.labels?.length) {
+      field = Array.from(el.labels)
+        .map((l) => {
+          const clone = l.cloneNode(true) as HTMLElement
+          clone.querySelectorAll('select, option, input, textarea').forEach((c) => c.remove())
+          return clone.textContent?.replace(/\s+/g, ' ').trim()
+        })
+        .filter(Boolean)
+        .join(' ')
+    }
     const head = field && field !== sel ? `${field} (current: ${sel})` : sel
     return `FILTER DROPDOWN: ${head}${optsSuffix}${stateSuffix(el)}`
   }

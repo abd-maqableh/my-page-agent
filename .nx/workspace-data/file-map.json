@@ -225,7 +225,7 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "3272852703608907909"
+          "hash": "13596604046786914580"
         },
         {
           "file": "src/core/intentRouter.ts",
@@ -233,7 +233,7 @@
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "10095191757330721372"
+          "hash": "6484916328488757263"
         },
         {
           "file": "src/core/text.ts",
@@ -241,11 +241,11 @@
         },
         {
           "file": "src/core/tools.ts",
-          "hash": "609463052098944139"
+          "hash": "10665290992525775899"
         },
         {
           "file": "src/core/types.ts",
-          "hash": "606989230836341144"
+          "hash": "8989058073155363838"
         },
         {
           "file": "src/index.ts",
@@ -253,7 +253,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "11265585126727579193"
+          "hash": "10698435444454836417"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -261,7 +261,7 @@
         },
         {
           "file": "src/main.ts",
-          "hash": "6371374143454914899"
+          "hash": "9526718402825743657"
         },
         {
           "file": "src/page-controller/PageController.ts",
@@ -269,11 +269,11 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "5231418348479564021"
+          "hash": "1772629208517328031"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "2321224787976878436"
+          "hash": "5102396860024074450"
         },
         {
           "file": "src/style.css",
@@ -284,6 +284,13 @@
           "hash": "17456431352775212755"
         },
         {
+          "file": "src/test/agent.scenario.test.ts",
+          "hash": "18165554062242708608",
+          "deps": [
+            "npm:vitest"
+          ]
+        },
+        {
           "file": "src/test/intent-router.test.ts",
           "hash": "3795771309978208962",
           "deps": [
@@ -292,14 +299,14 @@
         },
         {
           "file": "src/test/openai-client.test.ts",
-          "hash": "5982156550345166951",
+          "hash": "10503583410606851126",
           "deps": [
             "npm:vitest"
           ]
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "17226266544872857710",
+          "hash": "17829161275792066334",
           "deps": [
             "npm:vitest"
           ]

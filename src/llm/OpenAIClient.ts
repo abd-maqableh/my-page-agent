@@ -1,4 +1,4 @@
-import { normalizeAction } from '../core/tools'
+import { normalizeActions } from '../core/tools'
 import type { AgentAction, ChatMessage, LLMClient, LLMConfig } from '../core/types'
 
 interface ChatCompletionsResponse {
@@ -19,32 +19,46 @@ function extractJSON(text: string): string {
   const block = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
   const candidate = block?.[1]?.trim() ?? trimmed
 
-  // Use balanced-bracket extraction to isolate the FIRST complete JSON object.
-  // This handles cases where the LLM appends extra text or a second JSON object
-  // after the response (which would cause JSON.parse to fail at position N).
-  const start = candidate.indexOf('{')
-  if (start !== -1) {
-    let depth = 0
-    let inString = false
-    let escaped = false
-    for (let i = start; i < candidate.length; i++) {
-      const ch = candidate[i]
-      if (escaped) { escaped = false; continue }
-      if (ch === '\\' && inString) { escaped = true; continue }
-      if (ch === '"') { inString = !inString; continue }
-      if (inString) continue
-      if (ch === '{') depth++
-      else if (ch === '}') {
-        depth--
-        if (depth === 0) return candidate.slice(start, i + 1)
-      }
+  // Find the FIRST JSON value — either an object `{...}` or an array `[...]` — and
+  // return it via balanced-bracket extraction. Supporting arrays lets the model
+  // emit a batch of actions (e.g. `[{select},{select},{done}]`) in one response.
+  let start = -1
+  let open = '{'
+  let close = '}'
+  for (let i = 0; i < candidate.length; i++) {
+    const ch = candidate[i]
+    if (ch === '{' || ch === '[') {
+      start = i
+      open = ch
+      close = ch === '{' ? '}' : ']'
+      break
+    }
+  }
+  if (start === -1) {
+    throw new Error('LLM response did not include a JSON object.')
+  }
+
+  let depth = 0
+  let inString = false
+  let escaped = false
+  for (let i = start; i < candidate.length; i++) {
+    const ch = candidate[i]
+    if (escaped) { escaped = false; continue }
+    if (ch === '\\' && inString) { escaped = true; continue }
+    if (ch === '"') { inString = !inString; continue }
+    if (inString) continue
+    if (ch === open) depth++
+    else if (ch === close) {
+      depth--
+      if (depth === 0) return candidate.slice(start, i + 1)
     }
   }
 
-  throw new Error('LLM response did not include a JSON object.')
+  throw new Error('LLM response did not include a complete JSON value.')
 }
 
-export function parseAgentActionResponse(raw: string): AgentAction {
+/** Parse a model response into ONE OR MORE actions (supports batched arrays). */
+export function parseAgentActions(raw: string): AgentAction[] {
   let payload: unknown
   try {
     payload = JSON.parse(extractJSON(raw))
@@ -52,7 +66,16 @@ export function parseAgentActionResponse(raw: string): AgentAction {
     throw new Error(`Failed to parse LLM JSON response: ${error instanceof Error ? error.message : 'invalid json'}`)
   }
 
-  return normalizeAction(payload)
+  const actions = normalizeActions(payload)
+  if (actions.length === 0) {
+    throw new Error('LLM response contained no valid action.')
+  }
+  return actions
+}
+
+/** Back-compat: parse a single action (the first one if the model returned a batch). */
+export function parseAgentActionResponse(raw: string): AgentAction {
+  return parseAgentActions(raw)[0]
 }
 
 const DIRECT_PROVIDER_HOSTS = [
@@ -91,7 +114,7 @@ export class OpenAIClient implements LLMClient {
     this.config = config
   }
 
-  async getNextAction(messages: ChatMessage[]): Promise<AgentAction> {
+  async getNextActions(messages: ChatMessage[]): Promise<AgentAction[]> {
     const baseURL = this.config.baseURL.replace(/\/$/, '')
     const url = `${baseURL}/chat/completions`
 
@@ -100,19 +123,49 @@ export class OpenAIClient implements LLMClient {
     console.log('messages:', messages)
     console.groupEnd()
 
+    // Request body. Sending `max_tokens` and (optionally) a JSON response_format
+    // are the two biggest knobs for cutting generation time on slow servers.
+    const body: Record<string, unknown> = {
+      model: this.config.model,
+      temperature: this.config.temperature,
+      messages,
+    }
+    if (typeof this.config.maxTokens === 'number') {
+      body.max_tokens = this.config.maxTokens
+    }
+    if (this.config.jsonMode) {
+      body.response_format = { type: 'json_object' }
+    }
+
+    // Optional hard timeout so a stuck inference fails fast instead of hanging.
+    const controller =
+      typeof this.config.requestTimeoutMs === 'number' && this.config.requestTimeoutMs > 0
+        ? new AbortController()
+        : undefined
+    const timeoutId = controller
+      ? setTimeout(() => controller.abort(), this.config.requestTimeoutMs)
+      : undefined
+
     const t0 = performance.now()
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${this.config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.config.model,
-        temperature: this.config.temperature,
-        messages,
-      }),
-    })
+    let response: Response
+    try {
+      response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.config.apiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller?.signal,
+      })
+    } catch (error) {
+      if (timeoutId) clearTimeout(timeoutId)
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw new Error(`LLM request timed out after ${this.config.requestTimeoutMs}ms.`)
+      }
+      throw error
+    }
+    if (timeoutId) clearTimeout(timeoutId)
 
     const data = (await response.json()) as ChatCompletionsResponse
     const ms = Math.round(performance.now() - t0)
@@ -131,8 +184,8 @@ export class OpenAIClient implements LLMClient {
       throw new Error('LLM did not return message content.')
     }
 
-    const action = parseAgentActionResponse(content)
-    console.log('%c[PageAgent] action →', 'color:#f59e0b;font-weight:bold', action)
-    return action
+    const actions = parseAgentActions(content)
+    console.log('%c[PageAgent] actions →', 'color:#f59e0b;font-weight:bold', actions)
+    return actions
   }
 }

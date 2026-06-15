@@ -82,9 +82,10 @@ export function buildPrompt(
     }
   }
 
-  const system = [
-    'You are a browser page agent. Your ONLY output is a single JSON object — no markdown, no explanation.',
-    'Schema: {"thought":"<why>","action":"<name>","args":{<args>}}',
+  const allSystemLines = [
+    'You are a browser page agent. Your ONLY output is ONE JSON value — no markdown, no explanation.',
+    'Single action:    {"thought":"<why>","action":"<name>","args":{<args>}}',
+    'Multiple actions: {"thought":"<why>","actions":[{"action":"<name>","args":{<args>}}, ...]}',
     'Actions and their REQUIRED args:',
     '  click     → args: {"index": <number>}',
     '  input     → args: {"index": <number>, "text": "<string>"}',
@@ -99,9 +100,14 @@ export function buildPrompt(
     '=== CORE OUTPUT RULES ===',
     '  - Always include "index" for click/input/select/clear/hover — pick from the elements list.',
     '  - Never invent element indexes; only use indexes shown in the CURRENT elements list.',
+    '  - THOUGHT BREVITY: keep "thought" to a SHORT phrase (≤ 12 words). Do NOT write long reasoning, step-by-step plans, or restate these rules — that wastes time. Emit ONLY the JSON value, nothing before or after it.',
     '  - LANGUAGE RULE: The page and the user\'s request may each be in ANY language (and not necessarily the same one). Match the user\'s words to element labels by MEANING, not exact spelling — translate across languages when needed (e.g. a request in Arabic may target an English-labelled element and vice versa). All rules below apply identically in every language.',
     '  - STALE INDEX RULE: After any URL change (visible in history as "→ navigated to"), ALL element indexes from BEFORE that navigation are INVALID and must NOT be used again. Always pick indexes ONLY from the CURRENT ELEMENTS LIST shown in this observation.',
-    '  - If the task is complete or impossible, use "done". Output ONLY the JSON object — no other text.',
+    '  - If the task is complete or impossible, use "done". Output ONLY the JSON value — no other text.',
+    '=== MULTI-ACTION OUTPUT (BATCHING) ===',
+    '  - BATCHING RULE: You MAY return SEVERAL actions in ONE response using the "actions" array, and the agent runs them in order WITHOUT calling you again. This saves round-trips — prefer it when you can already see every element you need in the CURRENT elements list. Only batch actions whose "index" is ALREADY in the current list and that do NOT depend on an earlier action changing the page first.',
+    '  - BATCH-SAFE actions (chain as many as you need, then finish): `select`, `input`, `clear`, `scroll`, `hover`, `press_key`, plus a final `done`. Their indexes stay valid because they do not renumber the page.',
+    '  - BATCH-STOP actions: `navigate`, and EVERY `click` (a click may open a menu/dialog or load a new page and RENUMBER all indexes). A `navigate` or `click` MUST be the LAST action in the array — never put another action after it. If unsure whether later indexes survive, return just ONE action and you will be asked again after the page updates.',
     '=== TASK DECOMPOSITION ===',
     '  - REQUEST DECOMPOSITION RULE: A request such as "show me <qualifier> <entity>" (e.g. "show approved orders", "active users", "pending requests", "laptops in products") combines TWO parts: (a) a TARGET SECTION = the entity noun (orders / users / requests / products) and (b) a QUALIFIER = the adjective, status, or keyword (approved / active / pending / laptops). Resolve them strictly in this order:\n      step 1 — LOCATE THE SECTION: compare the entity noun against the CURRENT Page title/URL. If they already match (you are on that section), do NOT navigate — skip to step 2. If they do NOT match, get onto that section first: use `navigate` if the entity matches a KNOWN PAGE PATHS label, otherwise `click` a sidebar/nav link whose label matches the entity.\n      step 2 — APPLY THE QUALIFIER on that page: if the qualifier is one of a FILTER DROPDOWN\'s fixed options, use the STATUS FILTER RULE (`select`); if it is free text, use the KEYWORD SEARCH RULE (`input`).\n      Never apply the qualifier before you are on the correct section, and never call `done` after only navigating if a qualifier still needs to be applied. Do NOT assume the qualifier requires a brand-new page when a FILTER DROPDOWN or SEARCH BOX on the current page can satisfy it.',
     '  - CROSS-PAGE NAVIGATION: If the task says "in <section>" or "on <page>" (e.g. "in orders", "in settings", "on the users page") and the current page URL/title does NOT match that section, you MUST navigate there first. Find a sidebar/nav link whose label matches the section name and `click` it. Only after landing on the correct page should you look for tabs, filters, or items.',
@@ -111,6 +117,7 @@ export function buildPrompt(
     '  - FILTER FIELD NAME RULE: FILTER DROPDOWN labels read "FILTER DROPDOWN: <field name> (current: <value>)". The field names are NOT fixed — read them from the CURRENT elements list (they could be anything: category, department, priority, owner, year, الفئة, ...). When the request pairs a candidate VALUE with one of those FIELD NAMES — pattern "<value> <field>" or "<field> <value>" in any language — treat it as a FILTER, never a section or tab: use `select` on the dropdown whose field name matches, passing the remaining value words as "value". Generic example: request "<X> <field>" + element `FILTER DROPDOWN: <field>` → {"index":<that index>,"value":"<X>"}. The value does NOT need to be visible anywhere on the page — `select` opens the dropdown and picks the option for you.',
     '  - STATUS FILTER RULE: When asked to filter by a STATUS or CATEGORY (e.g. "show active items", "pending only", "archived"), find the element labelled "FILTER DROPDOWN:" and use `select` with the requested value (e.g. {"index":7,"value":"active"}). This opens the dropdown AND selects the option in one shot. Do NOT use `click` to open it manually. If the FILTER DROPDOWN shows a "[options: ...]" list, you MUST pick the value that best matches the request FROM that list (case-insensitive, allowing synonyms and cross-language equivalents — e.g. "approved" may map to "Completed"/"Complete"/"Active"). If NONE of the listed options reasonably matches the requested qualifier, the current page cannot satisfy it — do NOT force a wrong option; instead treat the qualifier as belonging to a different section (re-read REQUEST DECOMPOSITION step 1) or call `done` explaining the available options.',
     '  - FILTER ALREADY DONE: If the history already shows a successful `select` action on the FILTER DROPDOWN with the requested value, do NOT repeat it. Move on to the next part of the task.',
+    '  - MULTI-FILTER RULE: When the request names values for MORE THAN ONE distinct FILTER DROPDOWN field (e.g. a STATUS and a TYPE, or a status and a region), emit a SEPARATE `select` action for EACH field — each with its OWN "index" (the dropdown whose field name matches) and its OWN "value" — then a final `done`, ALL in one response via the "actions" array. NEVER merge two different filter values into a single `select`. Generic example: "<statusValue> <typeValue> <entity>" → {"thought":"apply both filters then finish","actions":[{"action":"select","args":{"index":<statusDropdown>,"value":"<statusValue>"}},{"action":"select","args":{"index":<typeDropdown>,"value":"<typeValue>"}},{"action":"done","args":{"result":"Filtered."}}]}.',
     '  - FILTER VALUE NOT AVAILABLE: If a previous `select` result contains "Available options: [...]", those are the ONLY values the dropdown accepts. Your next action MUST be ONE of: (a) `select` on the SAME FILTER DROPDOWN index using one of those EXACT listed values (you may map the requested word to an obvious synonym in the list, e.g. "approved"→"Complete", "active"→"On Progress" — only if the meaning clearly matches); or (b) `done` with a `result` that names the available options and states the requested filter value does not exist. NEVER `select` on an element that is not the FILTER DROPDOWN. NEVER invent a value that is not in the list. NEVER retry the exact same failing value.',
     '  - KEYWORD SEARCH RULE: When asked to search by a NAME, KEYWORD, or FREE-TEXT value (e.g. "find John Smith", "search New York", "show only laptops") — that value is NOT a status. Use `input` on the "SEARCH BOX:" or "INPUT:" element with the keyword. NEVER try to `select` a free-text value from the FILTER DROPDOWN.',
     '  - DECISION: Ask yourself — is the requested value one of the dropdown\'s own fixed options (e.g. Active/Pending/Archived)? If YES → use `select` on FILTER DROPDOWN. If NO → use `input` on the SEARCH BOX.',
@@ -140,7 +147,39 @@ export function buildPrompt(
     'Example: {"thought":"User asked for items with a specific status; select it on the status FILTER DROPDOWN","action":"select","args":{"index":7,"value":"<requested status>"}}',
     'Example: {"thought":"Request pairs a value with the field name of dropdown 9; this is a filter, not a section","action":"select","args":{"index":9,"value":"<the value words>"}}',
     'Example: {"thought":"User asked to export the current table; click the export button","action":"click","args":{"index":12}}',
-  ].join('\n')
+    'Example (batch — two filters then finish in ONE response): {"thought":"Apply both requested filters, then done","actions":[{"action":"select","args":{"index":7,"value":"<status value>"}},{"action":"select","args":{"index":9,"value":"<type value>"}},{"action":"done","args":{"result":"Filtered."}}]}',
+  ]
+
+  // ── Conditional rule pruning ──────────────────────────────────
+  // Only ship the rule groups whose element types actually appear on the current
+  // page. A typical list page (filters only) drops the TABS/SECTIONS, ITEMS,
+  // and FORMS groups entirely — cutting the system prompt (and thus prefill /
+  // inference time on slow self-hosted models) substantially.
+  const elText = observation.elementsText || ''
+  const has = (re: RegExp): boolean => re.test(elText)
+  const groupGate: Record<string, boolean> = {
+    'FILTERING & SEARCH': has(/FILTER DROPDOWN:|SEARCH BOX:/),
+    'TABS & SECTIONS': has(/TAB:|SECTION:/),
+    'ITEMS & MENUS': has(/Per-item actions menu|MENU ITEM:/),
+    'FORMS & INPUTS': has(/INPUT:|TEXTAREA:|SUBMIT BUTTON:|DATE PICKER:|TOGGLE:|CHECKBOX:|RADIO:/),
+  }
+  const dropExportRule = !/\b(export|download|تصدير|تنزيل|exporter|exportar)\b/i.test(task)
+
+  const keptLines: string[] = []
+  let dropGroup = false
+  for (const line of allSystemLines) {
+    const header = line.match(/^=== (.+) ===$/)
+    if (header) {
+      const group = header[1]
+      dropGroup = group in groupGate && !groupGate[group]
+      if (dropGroup) continue // skip the header of a pruned group
+    } else if (dropGroup) {
+      continue // skip the body lines of a pruned group
+    }
+    if (dropExportRule && /^\s*- EXPORT RULE:/.test(line)) continue
+    keptLines.push(line)
+  }
+  const system = keptLines.join('\n')
 
   const user = [
     `Task: ${task}`,

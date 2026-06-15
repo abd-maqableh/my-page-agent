@@ -66,6 +66,187 @@ function getElement(
   throw new Error("Missing required arg: index");
 }
 
+function findMatchingOption(value: string, options: string[]): string | undefined {
+  const normalizedQuery = normalizeText(value);
+  return options.find((option) => {
+    const normalizedOption = normalizeText(option);
+    const hasText = normalizedOption.length > 0;
+    return (
+      normalizedOption === normalizedQuery ||
+      (hasText && normalizedOption.includes(normalizedQuery)) ||
+      (hasText && normalizedQuery.includes(normalizedOption))
+    );
+  });
+}
+
+async function selectOnDropdown(
+  el: Element,
+  index: number | undefined,
+  value: string,
+  doc: Document,
+  win: Window & typeof globalThis,
+): Promise<{ success: true; message: string } | { success: false; availableOptions: string[]; message: string }> {
+  if (el.tagName.toLowerCase() === "select") {
+    const selectEl = el as HTMLSelectElement;
+    const options = Array.from(selectEl.options)
+      .map((option) => ({
+        text: option.text.replace(/\s+/g, " ").trim(),
+        value: option.value,
+      }))
+      .filter((option) => option.text.length > 0 || option.value.length > 0);
+    const matchedText = findMatchingOption(value, options.map((option) => option.text));
+    const match = matchedText
+      ? options.find((option) => option.text === matchedText)
+      : undefined;
+
+    if (!match) {
+      const availableOptions = options.map((option) => option.text).filter(Boolean);
+      return {
+        success: false,
+        availableOptions,
+        message: `No option matched "${value}" on element ${index}. Available options: [${availableOptions.join(", ")}]. Choose one of these EXACT values, or call done if none fits the request.`,
+      };
+    }
+
+    selectEl.value = match.value;
+    el.dispatchEvent(new win.Event("input", { bubbles: true }));
+    el.dispatchEvent(new win.Event("change", { bubbles: true }));
+
+    return {
+      success: true,
+      message: `Selected "${match.text}" on element ${index}`,
+    };
+  }
+
+  if (el.getAttribute("role") === "combobox") {
+    (el as HTMLElement).focus();
+    el.dispatchEvent(
+      new win.MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      }),
+    );
+    el.dispatchEvent(
+      new win.MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      }),
+    );
+    el.dispatchEvent(
+      new win.MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      }),
+    );
+
+    const listbox = await waitForElement('[role="listbox"]', 1500, doc);
+    if (!listbox) {
+      throw new Error(`Dropdown did not open for element ${index}`);
+    }
+
+    const normalizedValue = normalizeText(value);
+    const findOption = (): HTMLElement | undefined =>
+      (Array.from(doc.querySelectorAll('[role="option"]')) as HTMLElement[]).find((opt) => {
+        const text = normalizeText(opt.textContent ?? "");
+        return (
+          text === normalizedValue ||
+          text.includes(normalizedValue) ||
+          normalizedValue.includes(text)
+        );
+      });
+
+    let match = findOption();
+
+    if (!match && el instanceof win.HTMLInputElement) {
+      const setter = Object.getOwnPropertyDescriptor(
+        win.HTMLInputElement.prototype,
+        "value",
+      )?.set;
+      setter?.call(el, value);
+      el.dispatchEvent(new win.Event("input", { bubbles: true }));
+      await new Promise<void>((resolve) => setTimeout(resolve, 300));
+      match = findOption();
+    }
+
+    const options = Array.from(doc.querySelectorAll('[role="option"]'))
+      .map((opt) => (opt.textContent ?? "").replace(/\s+/g, " ").trim())
+      .filter(Boolean);
+
+    if (!match) {
+      // Close as robustly as the success path: Escape on the open listbox AND a
+      // body mousedown/mouseup so MUI's ClickAwayListener actually dismisses the
+      // portal. (Escape alone often leaves the listbox visibly open.)
+      const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
+      const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
+      escTarget.dispatchEvent(
+        new win.KeyboardEvent("keydown", {
+          key: "Escape",
+          code: "Escape",
+          keyCode: 27,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+      doc.body.dispatchEvent(
+        new win.MouseEvent("mousedown", { bubbles: true, cancelable: true, view: win }),
+      );
+      doc.body.dispatchEvent(
+        new win.MouseEvent("mouseup", { bubbles: true, cancelable: true, view: win }),
+      );
+      (el as HTMLElement).blur?.();
+      return {
+        success: false,
+        availableOptions: options,
+        message: `The filter dropdown has no option matching "${value}". Available options: [${options.join(", ")}]. None of these is "${value}". Either select one of these EXACT values if it is a clear synonym of the request, or call done explaining that "${value}" is not an available filter value and listing the options above.`,
+      };
+    }
+
+    match.click();
+
+    await new Promise<void>((resolve) => setTimeout(resolve, 120));
+    const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
+    const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
+    escTarget.dispatchEvent(
+      new win.KeyboardEvent("keydown", {
+        key: "Escape",
+        code: "Escape",
+        keyCode: 27,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    doc.body.dispatchEvent(
+      new win.MouseEvent("mousedown", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      }),
+    );
+    doc.body.dispatchEvent(
+      new win.MouseEvent("mouseup", {
+        bubbles: true,
+        cancelable: true,
+        view: win,
+      }),
+    );
+    (el as HTMLElement).blur?.();
+
+    return {
+      success: true,
+      message: `Selected "${value}" from dropdown element ${index}`,
+    };
+  }
+
+  return {
+    success: false,
+    availableOptions: [],
+    message: `Element ${index} is not a FILTER DROPDOWN — the select action only works on dropdown/combobox elements. To choose a filter value, target the element labelled "FILTER DROPDOWN:". If no suitable filter exists, call done.`,
+  };
+}
+
 function doClick(
   index: number | undefined,
   args: AgentAction["args"],
@@ -231,165 +412,8 @@ async function doSelect(
     throw new Error("Missing required arg: value");
   }
 
-  // Native <select>
-  if (el.tagName.toLowerCase() === "select") {
-    const selectEl = el as HTMLSelectElement;
-    const normalizedQuery = normalizeText(value);
-    const match = Array.from(selectEl.options).find((option) => {
-      const optText = normalizeText(option.text);
-      const optValue = normalizeText(option.value);
-      return (
-        optText === normalizedQuery ||
-        optValue === normalizedQuery ||
-        optText.includes(normalizedQuery) ||
-        normalizedQuery.includes(optText) ||
-        optValue.includes(normalizedQuery) ||
-        normalizedQuery.includes(optValue)
-      );
-    });
-
-    if (!match) {
-      const available = Array.from(selectEl.options)
-        .map((o) => o.text.replace(/\s+/g, " ").trim())
-        .filter(Boolean)
-        .join(", ");
-      return {
-        success: false,
-        message: `No option matched "${value}" on element ${index}. Available options: [${available}]. Choose one of these EXACT values, or call done if none fits the request.`,
-      };
-    }
-
-    selectEl.value = match.value;
-    el.dispatchEvent(new win.Event("input", { bubbles: true }));
-    el.dispatchEvent(new win.Event("change", { bubbles: true }));
-
-    return {
-      success: true,
-      message: `Selected "${match.text}" on element ${index}`,
-    };
-  }
-
-  // Custom combobox (any framework with role="combobox") — open it,
-  // wait for portal-rendered options, click the match.
-  if (el.getAttribute("role") === "combobox") {
-    (el as HTMLElement).focus();
-    // Most custom combobox implementations listen on mousedown — dispatch the full sequence
-    el.dispatchEvent(
-      new win.MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    el.dispatchEvent(
-      new win.MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    el.dispatchEvent(
-      new win.MouseEvent("click", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-
-    const listbox = await waitForElement('[role="listbox"]', 1500, doc);
-    if (!listbox) {
-      throw new Error(`Dropdown did not open for element ${index}`);
-    }
-
-    const normalizedValue = normalizeText(value);
-    const findOption = (): HTMLElement | undefined =>
-      (Array.from(doc.querySelectorAll('[role="option"]')) as HTMLElement[]).find((opt) => {
-        const text = normalizeText(opt.textContent ?? "");
-        return (
-          text === normalizedValue ||
-          text.includes(normalizedValue) ||
-          normalizedValue.includes(text)
-        );
-      });
-
-    let match = findOption();
-
-    // Autocomplete-style comboboxes (MUI Autocomplete, react-select) filter the
-    // option list by the input's current text — the wanted option may be hidden
-    // until we type it. Retype the value and re-query before giving up.
-    if (!match && el instanceof win.HTMLInputElement) {
-      const setter = Object.getOwnPropertyDescriptor(
-        win.HTMLInputElement.prototype,
-        "value",
-      )?.set;
-      setter?.call(el, value);
-      el.dispatchEvent(new win.Event("input", { bubbles: true }));
-      await new Promise<void>((resolve) => setTimeout(resolve, 300));
-      match = findOption();
-    }
-
-    const options = Array.from(doc.querySelectorAll('[role="option"]'));
-
-    if (!match) {
-      const optionTexts = options
-        .map((opt) => (opt.textContent ?? "").replace(/\s+/g, " ").trim())
-        .filter(Boolean);
-      // Close the dropdown so the next observation has STABLE element indices
-      // (an open listbox re-numbers everything and confuses the model).
-      doc.dispatchEvent(
-        new win.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
-      );
-      (el as HTMLElement).blur?.();
-      return {
-        success: false,
-        message: `The filter dropdown has no option matching "${value}". Available options: [${optionTexts.join(", ")}]. None of these is "${value}". Either select one of these EXACT values if it is a clear synonym of the request, or call done explaining that "${value}" is not an available filter value and listing the options above.`,
-      };
-    }
-
-    match.click();
-
-    // Close the dropdown after selection.
-    // MUI multi-select listens for Escape on the listbox element (not document).
-    // Fallback: mousedown on body triggers MUI's ClickAwayListener.
-    await new Promise<void>((resolve) => setTimeout(resolve, 120));
-    const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
-    const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
-    escTarget.dispatchEvent(
-      new win.KeyboardEvent("keydown", {
-        key: "Escape",
-        code: "Escape",
-        keyCode: 27,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    // Also simulate a mousedown on body as a second-chance close for ClickAwayListener
-    doc.body.dispatchEvent(
-      new win.MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    doc.body.dispatchEvent(
-      new win.MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    (el as HTMLElement).blur?.();
-
-    return {
-      success: true,
-      message: `Selected "${value}" from dropdown element ${index}`,
-    };
-  }
-
-  return {
-    success: false,
-    message: `Element ${index} is not a FILTER DROPDOWN — the select action only works on dropdown/combobox elements. To choose a filter value, target the element labelled "FILTER DROPDOWN:". If no suitable filter exists, call done.`,
-  };
+  const result = await selectOnDropdown(el, index, value, doc, win);
+  return { success: result.success, message: result.message };
 }
 
 function doScroll(

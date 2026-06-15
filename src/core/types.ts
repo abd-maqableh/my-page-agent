@@ -68,7 +68,13 @@ export interface AgentRunResult {
 }
 
 export interface LLMClient {
-  getNextAction(messages: ChatMessage[]): Promise<AgentAction>
+  /**
+   * Ask the model for the next action(s). Returning more than one action lets the
+   * agent run a whole batch (e.g. apply several filters, then `done`) from a SINGLE
+   * API round-trip instead of one call per action. The agent still re-observes and
+   * re-asks whenever an action changes the page structure (navigate / click).
+   */
+  getNextActions(messages: ChatMessage[]): Promise<AgentAction[]>
 }
 
 /**
@@ -93,6 +99,24 @@ export interface LLMConfig {
   model: string
   temperature?: number
   /**
+   * Cap on generated tokens per call (`max_tokens`). The agent only needs a small
+   * JSON action (or a short batch), so a low cap (e.g. 256–800) prevents slow,
+   * runaway generation on verbose/"thinking" models. Omit to send no cap.
+   */
+  maxTokens?: number
+  /**
+   * When true, request `response_format: { type: 'json_object' }` so compatible
+   * servers (vLLM, SGLang, OpenAI, …) return ONLY valid JSON — this also
+   * suppresses long prose/think-traces, which is the biggest generation-time win.
+   * Leave off for servers that do not support structured output.
+   */
+  jsonMode?: boolean
+  /**
+   * Abort a single request after this many ms (via AbortController) so a stuck
+   * inference fails fast instead of hanging. Omit to wait indefinitely.
+   */
+  requestTimeoutMs?: number
+  /**
    * Opt-in flag to allow `baseURL` pointing directly at a public model provider
    * (e.g. https://api.openai.com). DISABLED BY DEFAULT to prevent accidentally
    * shipping raw API keys to the browser. Production deployments MUST route
@@ -102,6 +126,11 @@ export interface LLMConfig {
 }
 
 export interface AgentConfigBase {
+  /**
+   * Optional injected client for deterministic tests, demos, or custom runtimes.
+   * When omitted, the agent creates the default OpenAI-compatible client.
+   */
+  llmClient?: LLMClient
   maxSteps?: number
   callbacks?: AgentCallbacks
   /**
