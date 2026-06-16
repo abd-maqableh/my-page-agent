@@ -79,6 +79,35 @@ function findMatchingOption(value: string, options: string[]): string | undefine
   });
 }
 
+/**
+ * Dismiss any open MUI/portal listbox and WAIT until it is actually removed.
+ * Escape + ClickAwayListener dismissal is asynchronous, so returning before the
+ * portal is gone is exactly what let multiple probed dropdowns stack open. Polls
+ * (re-firing the dismiss sequence) until no [role=listbox] remains, up to ~600ms.
+ */
+async function dismissOpenDropdown(
+  doc: Document,
+  win: Window & typeof globalThis,
+  anchor: HTMLElement | null,
+): Promise<void> {
+  const fire = () => {
+    const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
+    const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
+    escTarget.dispatchEvent(
+      new win.KeyboardEvent("keydown", { key: "Escape", code: "Escape", keyCode: 27, bubbles: true, cancelable: true }),
+    );
+    doc.body.dispatchEvent(new win.MouseEvent("mousedown", { bubbles: true, cancelable: true, view: win }));
+    doc.body.dispatchEvent(new win.MouseEvent("mouseup", { bubbles: true, cancelable: true, view: win }));
+    anchor?.blur?.();
+  };
+  fire();
+  const start = Date.now();
+  while (doc.querySelector('[role="listbox"]') && Date.now() - start < 600) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    fire();
+  }
+}
+
 async function selectOnDropdown(
   el: Element,
   index: number | undefined,
@@ -176,27 +205,10 @@ async function selectOnDropdown(
       .filter(Boolean);
 
     if (!match) {
-      // Close as robustly as the success path: Escape on the open listbox AND a
-      // body mousedown/mouseup so MUI's ClickAwayListener actually dismisses the
-      // portal. (Escape alone often leaves the listbox visibly open.)
-      const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
-      const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
-      escTarget.dispatchEvent(
-        new win.KeyboardEvent("keydown", {
-          key: "Escape",
-          code: "Escape",
-          keyCode: 27,
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
-      doc.body.dispatchEvent(
-        new win.MouseEvent("mousedown", { bubbles: true, cancelable: true, view: win }),
-      );
-      doc.body.dispatchEvent(
-        new win.MouseEvent("mouseup", { bubbles: true, cancelable: true, view: win }),
-      );
-      (el as HTMLElement).blur?.();
+      // Close the portal robustly and WAIT until it is actually gone. Escape +
+      // ClickAwayListener dismissal is async; a failed probe that leaves the
+      // listbox open is exactly what stacked multiple dropdowns open.
+      await dismissOpenDropdown(doc, win, el as HTMLElement);
       return {
         success: false,
         availableOptions: options,
@@ -207,32 +219,7 @@ async function selectOnDropdown(
     match.click();
 
     await new Promise<void>((resolve) => setTimeout(resolve, 120));
-    const openListbox = doc.querySelector('[role="listbox"]') as HTMLElement | null;
-    const escTarget: EventTarget = openListbox ?? doc.activeElement ?? doc.body;
-    escTarget.dispatchEvent(
-      new win.KeyboardEvent("keydown", {
-        key: "Escape",
-        code: "Escape",
-        keyCode: 27,
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    doc.body.dispatchEvent(
-      new win.MouseEvent("mousedown", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    doc.body.dispatchEvent(
-      new win.MouseEvent("mouseup", {
-        bubbles: true,
-        cancelable: true,
-        view: win,
-      }),
-    );
-    (el as HTMLElement).blur?.();
+    await dismissOpenDropdown(doc, win, el as HTMLElement);
 
     return {
       success: true,

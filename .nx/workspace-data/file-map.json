@@ -225,7 +225,7 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "10134376556242058390"
+          "hash": "2559294628179938479"
         },
         {
           "file": "src/core/intentRouter.ts",
@@ -233,7 +233,7 @@
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "10603988669904186960"
+          "hash": "12812920759871736628"
         },
         {
           "file": "src/core/text.ts",
@@ -269,7 +269,7 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "1772629208517328031"
+          "hash": "152103051405390178"
         },
         {
           "file": "src/page-controller/domScanner.ts",
@@ -285,7 +285,7 @@
         },
         {
           "file": "src/test/agent.scenario.test.ts",
-          "hash": "18165554062242708608",
+          "hash": "17163814259954852146",
           "deps": [
             "npm:vitest"
           ]

@@ -509,11 +509,12 @@ describe('agent scenarios', () => {
       </main>
     `
 
-    // Mirrors the reported bug: a terse single-call model returns ONE useless
-    // click instead of selecting the two requested filters. The deterministic
-    // pre/post passes must still apply BOTH "Mining License" and "Southern".
+    // Mirrors the reported bug: a terse single-call model CLICKS a filter dropdown
+    // instead of selecting a value. That click on a FILTER DROPDOWN is real filter
+    // intent, so deterministic completion must finish the job — applying BOTH
+    // "Mining License" and "Southern" from the task — with no extra model call.
     const client = new CountingScriptedLLMClient([
-      { thought: 'guessing', action: 'click', args: { index: 3 } },
+      { thought: 'guessing', action: 'click', args: { index: 1 } },
     ])
 
     const agent = new MyPageAgent({
@@ -532,6 +533,66 @@ describe('agent scenarios', () => {
     expect(selects[0].value).toBe('Mining License')
     expect(selects[1].value).toBe('Southern')
     // Exactly ONE model round-trip — the filters were applied without the model.
+    expect(client.calls).toBe(1)
+  })
+
+  it('single-call mode surfaces the model\u2019s done message for an impossible request', async () => {
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 240,
+        bottom: 48,
+        width: 240,
+        height: 48,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+
+    document.body.innerHTML = `
+      <main>
+        <label>
+          Request Type
+          <select>
+            <option>All</option>
+            <option>Mining License</option>
+          </select>
+        </label>
+        <button type="button">Reset</button>
+      </main>
+    `
+
+    // The request names nothing on the page, so the model returns ONLY a `done`
+    // that explains the situation. The agent MUST surface that explanation rather
+    // than the generic "Executed one-call plan." — and apply no filters.
+    const explanation =
+      'There is no "original page" here. Available filters: Request Type (Mining License).'
+    const client = new CountingScriptedLLMClient([
+      { thought: 'nothing matches', action: 'done', args: { result: explanation } },
+    ])
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      singleLLMCall: true,
+      maxSteps: 4,
+    })
+
+    const result = await agent.execute('show me the original page')
+    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
+
+    expect(result.status).toBe('done')
+    // The model's own explanation is surfaced verbatim — NOT a generic confirmation.
+    expect(result.message).toBe(explanation)
+    expect(result.message).not.toBe('Executed one-call plan.')
+    // No filter was applied for an impossible request.
+    expect(selects[0].value).toBe('All')
     expect(client.calls).toBe(1)
   })
 })

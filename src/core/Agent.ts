@@ -184,14 +184,12 @@ export class Agent {
     const MAX_BATCH = 6
 
     if (this.singleLLMCall) {
-      // ── PRE-PASS: deterministic filter completion (no model call) ──
-      // Apply any FILTER DROPDOWN values the task literally names. This closes the
-      // LLM↔DOM gap for filter tasks WITHOUT a model round-trip: `selectOnDropdown`
-      // self-validates, so a value is only applied when one of THAT dropdown's own
-      // options matches a task word. With filters already set, the single model
-      // call below only has to confirm/finish — it can no longer fire stray clicks.
-      const preApplied = await this.completeTaskFiltersDeterministically(task, 1, history)
-
+      // ONE model call, then deterministic completion — but ONLY when the model
+      // shows REAL filter intent. We deliberately do NOT pre-probe dropdowns:
+      // blindly calling `select` on every dropdown opened them all (MUI comboboxes
+      // are portals) and left them stuck open for non-filter requests like
+      // "show me the original page". The model speaks first; we only finish what it
+      // actually started.
       this.callbacks?.onStatus?.('Step 1: observing page')
       const observation = this.pageController.observe()
 
@@ -202,11 +200,6 @@ export class Agent {
       try {
         actions = await this.client.getNextActions(messages)
       } catch (error) {
-        // The deterministic pass may already have satisfied the request — don't
-        // hard-fail the run if we managed to apply at least one filter.
-        if (preApplied > 0) {
-          return { status: 'done', history, message: 'Applied requested filters.' }
-        }
         return {
           status: 'error',
           history,
@@ -215,42 +208,80 @@ export class Agent {
       }
 
       if (actions.length === 0) {
-        if (preApplied > 0) {
-          return { status: 'done', history, message: 'Applied requested filters.' }
-        }
         return { status: 'error', history, message: 'Model returned no actions.' }
       }
 
-      // Execute the model's plan, but DEFER a bare `done` so the post-pass can still
-      // apply anything the model skipped before we accept completion.
+      // Execute the model's plan. A bare `done` is DEFERRED and its `result` text is
+      // REMEMBERED so an impossible request ("show me the original page") or a
+      // question surfaces the model's OWN explanation. We also detect FILTER INTENT:
+      // the model either emitted a `select`, OR clicked a FILTER DROPDOWN element
+      // (the stray-click bug). Only filter intent unlocks deterministic completion
+      // — navigation, item menus, toggles, and a bare `done` NEVER open dropdowns.
       let terminal: AgentRunResult | null = null
       let modelActed = false
+      let filterIntent = false
+      let doneMessage: string | null = null
       const batch = actions.slice(0, MAX_BATCH)
       for (let j = 0; j < batch.length; j += 1) {
         const action = batch[j]
-        if (action.action === 'done') continue
+        if (action.action === 'done') {
+          const text = action.args?.result?.trim()
+          if (text) doneMessage = text
+          continue
+        }
+        if (action.action === 'select') {
+          filterIntent = true
+        } else if (action.action === 'click') {
+          const lbl = observation.elements.find((e) => e.index === action.args?.index)?.label ?? ''
+          if (lbl.startsWith('FILTER DROPDOWN:')) filterIntent = true
+        }
         modelActed = true
-        const outcome = await this.runAction(task, action, observation, 2 + j * 0.1, history, failureRef, verifyRef)
+        const outcome = await this.runAction(task, action, observation, 1 + j * 0.1, history, failureRef, verifyRef)
         if (outcome.type === 'return') { terminal = outcome.result; break }
         if (outcome.type === 'break') break
       }
       if (terminal) return terminal
 
-      // ── POST-PASS: only if the model changed the page, catch any newly
-      // revealed filters the model left unset. Skipped for pure filter tasks
-      // (model returned done) to avoid redundant dropdown work.
-      const postApplied = modelActed
-        ? await this.completeTaskFiltersDeterministically(task, 3, history)
-        : 0
+      // Deterministic completion — gated on REAL filter intent, then leftover task
+      // words. Filter intent = the model emitted a `select` / clicked a FILTER
+      // DROPDOWN, OR the deterministic router landed on a known page with leftover
+      // qualifier words ("...mining license of southern ON GOVERNMENT FOLLOWUP" →
+      // routed to that page, leftover [mining, license, southern]). The router
+      // signal lets us finish a filter task even when the model fires a stray
+      // click — while a vague/impossible request like "show me the original page"
+      // (no route, model `done`) opens NO dropdown at all.
+      const routedNarrowing = (() => {
+        const r = resolveIntent(task, this.pages)
+        return !!r && !r.complete
+      })()
+      const completionApplied =
+        filterIntent || routedNarrowing
+          ? await this.completeTaskFiltersDeterministically(task, 2, history)
+          : 0
 
-      return {
-        status: 'done',
-        history,
-        message:
-          preApplied + postApplied > 0
-            ? 'Applied requested filters.'
-            : 'Executed one-call plan.',
+      const anyFilterApplied =
+        completionApplied > 0 ||
+        history.some((h) => h.action.action === 'select' && h.result.success)
+
+      // Honest final message, in priority order:
+      //  1. filters applied → concrete outcome;
+      //  2. else the model's own `done` explanation → "no such page" / Q&A answer
+      //     (an invalid request must NOT say "Executed one-call plan");
+      //  3. else the model acted but gave no summary;
+      //  4. else nothing matched — say so plainly instead of faking success.
+      let message: string
+      if (anyFilterApplied) {
+        message = 'Applied requested filters.'
+      } else if (doneMessage) {
+        message = doneMessage
+      } else if (modelActed) {
+        message = 'Executed the requested action.'
+      } else {
+        message = 'No matching action was found for this request on the current page.'
       }
+
+      this.callbacks?.onStatus?.('Done')
+      return { status: 'done', history, message }
     }
 
     for (let step = 1; step <= this.maxSteps; step += 1) {
@@ -552,10 +583,28 @@ export class Agent {
 
     for (let pass = 0; pass < MAX_PASSES; pass += 1) {
       const observation = this.pageController.observe()
-      const unset = observedFilters(observation).filter(
+      const filters = observedFilters(observation)
+      const unset = filters.filter(
         (f) => isNeutralFilterValue(f.current) && !tried.has(f.field || `#${f.index}`),
       )
       if (unset.length === 0) break
+
+      // LEFTOVER GATE: only probe while the task still names a value that no
+      // already-applied filter (or the routed page/section) has consumed. Once the
+      // model has set everything the task named, leftover is empty → we open NO
+      // dropdowns. This stops us probing unrelated dropdowns (e.g. Governorate)
+      // after the requested filters are in place — the cause of the "every dropdown
+      // left open" bug.
+      const setFilters = filters.filter((f) => !isNeutralFilterValue(f.current))
+      const consumed = new Set<string>()
+      for (const f of setFilters) for (const w of meaningfulWords(f.current)) consumed.add(w)
+      const routed = resolveIntent(task, this.pages)
+      if (routed) {
+        for (const w of meaningfulWords(routed.label)) consumed.add(w)
+        if (routed.section) for (const w of meaningfulWords(routed.section)) consumed.add(w)
+      }
+      const leftover = meaningfulWords(task).filter((w) => !consumed.has(w))
+      if (leftover.length === 0) break
 
       let appliedThisPass = false
       for (const f of unset) {

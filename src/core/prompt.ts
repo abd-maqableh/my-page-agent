@@ -114,6 +114,7 @@ export function buildPrompt(
           '  - SINGLE-CALL MODE: You will be called only once for this task. Return the full action plan from the current observation so the task can finish without another model call.',
           '  - In single-call mode, prefer one `actions` array that includes all needed fills/selects and exactly one final submit/click/done flow if applicable.',
           '  - Never emit repeated identical clicks, especially repeated submit clicks.',
+          '  - IMPOSSIBLE OR QUESTION: If the request cannot be satisfied on this page (no matching page, section, or control exists — e.g. the user names something that is not present), OR the user is ASKING a question rather than requesting an action, return ONE `done` whose `result` clearly explains the situation (and lists what IS available) or answers the question. Do NOT invent an action or click an unrelated element.',
         ]
       : []),
     '=== TASK DECOMPOSITION ===',
