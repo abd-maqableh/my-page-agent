@@ -6,10 +6,17 @@ interface ChatCompletionsResponse {
     message?: {
       content?: string | null
     }
+    finish_reason?: string | null
   }>
-  error?: {
-    message?: string
-  }
+  // OpenAI returns { error: { message } }; native Ollama errors can be { error: "string" }.
+  error?: { message?: string } | string
+}
+
+/** Read an error message from either the OpenAI-style object or a bare string. */
+function readErrorMessage(error: ChatCompletionsResponse['error']): string | undefined {
+  if (!error) return undefined
+  if (typeof error === 'string') return error
+  return error.message
 }
 
 function extractJSON(text: string): string {
@@ -172,16 +179,27 @@ export class OpenAIClient implements LLMClient {
 
     if (!response.ok) {
       console.error(`%c[PageAgent] LLM error (${response.status}) in ${ms}ms`, 'color:red', data)
-      throw new Error(data.error?.message ?? `LLM request failed with status ${response.status}`)
+      throw new Error(
+        readErrorMessage(data.error) ?? `LLM request failed with status ${response.status}`,
+      )
     }
 
-    const content = data.choices?.[0]?.message?.content
+    const choice = data.choices?.[0]
+    const content = choice?.message?.content
     console.group(`%c[PageAgent] LLM response ✓ (${ms}ms)`, 'color:#22c55e;font-weight:bold')
     console.log('raw:', content)
     console.groupEnd()
 
     if (!content) {
       throw new Error('LLM did not return message content.')
+    }
+
+    // Truncation guard: when the model hit the token cap the JSON is cut off and
+    // would throw a confusing parse error. Surface an actionable message instead.
+    if (choice?.finish_reason === 'length') {
+      throw new Error(
+        'Model output was truncated (hit the token limit). Increase max_tokens (VITE_AGENT_MAX_TOKENS) and try again.',
+      )
     }
 
     const actions = parseAgentActions(content)

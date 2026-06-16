@@ -1,4 +1,8 @@
-import type { ActionExecutionResult, AgentAction } from "../core/types";
+import type {
+  ActionExecutionResult,
+  ActionQueueResult,
+  AgentAction,
+} from "../core/types";
 import { normalizeText } from "../core/text";
 
 /** Poll until a DOM element matching selector appears, or timeoutMs elapses. */
@@ -638,4 +642,53 @@ export async function runAction(
         error instanceof Error ? error.message : "Unknown execution error",
     };
   }
+}
+
+/**
+ * Execute the model's planned actions IN ORDER as a queue. There is no re-ask
+ * loop: whatever the model returned is what runs. The queue stops early ONLY on
+ * a failed action or an explicit `done`. `click` / `navigate` are NOT treated as
+ * boundaries here because navigation is resolved deterministically BEFORE the
+ * single model call, so the plan targets the page that is already rendered.
+ */
+export async function runActionQueue(
+  actions: AgentAction[],
+  elementMap: Map<number, Element>,
+  doc: Document = document,
+  win: Window & typeof globalThis = window,
+): Promise<ActionQueueResult> {
+  const items: ActionQueueResult["items"] = [];
+
+  if (actions.length === 0) {
+    return {
+      items,
+      done: false,
+      error: "Model returned no actions.",
+    };
+  }
+
+  for (const action of actions) {
+    const result = await runAction(action, elementMap, doc, win);
+    items.push({ action, result });
+
+    if (!result.success) {
+      return {
+        items,
+        done: false,
+        error: result.message,
+      };
+    }
+
+    if (action.action === "done" || result.done) {
+      return {
+        items,
+        done: true,
+      };
+    }
+  }
+
+  return {
+    items,
+    done: false,
+  };
 }

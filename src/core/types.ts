@@ -49,6 +49,19 @@ export interface ActionExecutionResult {
   done?: boolean
 }
 
+export interface ActionQueueItemResult {
+  action: AgentAction
+  result: ActionExecutionResult
+}
+
+export interface ActionQueueResult {
+  items: ActionQueueItemResult[]
+  /** True only when an explicit `done` action (or result.done) ended the queue. */
+  done: boolean
+  /** Set when an action failed; carries the failure message. */
+  error?: string
+}
+
 export interface AgentHistoryEntry {
   step: number
   observation: string
@@ -132,11 +145,6 @@ export interface AgentConfigBase {
    */
   llmClient?: LLMClient
   maxSteps?: number
-  /**
-   * When true, the agent asks the LLM once per task, then executes the returned
-   * plan locally without re-querying for each step.
-   */
-  singleLLMCall?: boolean
   callbacks?: AgentCallbacks
   /**
    * Optional gate invoked before every action is executed. Return false (or a

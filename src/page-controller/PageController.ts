@@ -1,9 +1,10 @@
 import type {
   AgentAction,
   ActionExecutionResult,
+  ActionQueueResult,
   PageObservation,
 } from "../core/types";
-import { runAction } from "./actions";
+import { runAction, runActionQueue } from "./actions";
 import { scanInteractiveElements } from "./domScanner";
 
 export class PageController {
@@ -81,5 +82,23 @@ export class PageController {
   async executeAction(action: AgentAction): Promise<ActionExecutionResult> {
     const { doc, win } = this.getDocWin();
     return runAction(action, this.elementMap, doc, win);
+  }
+
+  async executeActionQueue(actions: AgentAction[]): Promise<ActionQueueResult> {
+    const { doc, win } = this.getDocWin();
+    const queue = await runActionQueue(actions, this.elementMap, doc, win);
+
+    for (const item of queue.items) {
+      if (
+        item.result.success &&
+        (item.action.action === "click" ||
+          item.action.action === "input" ||
+          item.action.action === "select")
+      ) {
+        await this.waitForStability();
+      }
+    }
+
+    return queue;
   }
 }

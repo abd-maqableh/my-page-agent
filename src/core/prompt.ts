@@ -64,7 +64,6 @@ export function buildPrompt(
   observation: PageObservation,
   history: AgentHistoryEntry[],
   pages?: PagesMap,
-  singleCallMode = false,
 ): ChatMessage[] {
   const navigationRules: string[] = []
   if (pages && Object.keys(pages).length > 0) {
@@ -84,9 +83,12 @@ export function buildPrompt(
   }
 
   const allSystemLines = [
-    'You are a browser page agent. Your ONLY output is ONE JSON value — no markdown, no explanation.',
-    'Single action:    {"thought":"<why>","action":"<name>","args":{<args>}}',
-    'Multiple actions: {"thought":"<why>","actions":[{"action":"<name>","args":{<args>}}, ...]}',
+    'You are a browser page agent. Your ONLY output is ONE JSON OBJECT — no markdown, no prose, no explanation.',
+    'RESPONSE FORMAT — ALWAYS this exact shape (an object with an "actions" array):',
+    '  {"thought":"<short why>","actions":[ {"action":"<name>","args":{<args>}}, ... , {"action":"done","args":{"result":"<summary>"}} ]}',
+    '  - ALWAYS return an OBJECT with an "actions" array. Even a SINGLE action is a one-element array. NEVER return a bare array or a top-level single action.',
+    '  - The LAST action SHOULD be `done`; its "result" is the human-readable summary shown to the user (or the answer to a question).',
+    '  - Put every action you can already perform from the CURRENT elements list into the array, in execution order.',
     'Actions and their REQUIRED args:',
     '  click     → args: {"index": <number>}',
     '  input     → args: {"index": <number>, "text": "<string>"}',
@@ -98,6 +100,8 @@ export function buildPrompt(
     '  wait      → args: {"timeoutMs": <ms>}',
     '  navigate  → args: {"url": "<path>"}',
     '  done      → args: {"result": "<summary>"}',
+    'Worked example — task "show sent applications" while already on /applications:',
+    '  {"thought":"filter status to Sent then finish","actions":[{"action":"select","args":{"index":3,"value":"Sent"}},{"action":"done","args":{"result":"Filtered applications by Sent."}}]}',
     '=== CORE OUTPUT RULES ===',
     '  - Always include "index" for click/input/select/clear/hover — pick from the elements list.',
     '  - Never invent element indexes; only use indexes shown in the CURRENT elements list.',
@@ -106,17 +110,10 @@ export function buildPrompt(
     '  - STALE INDEX RULE: After any URL change (visible in history as "→ navigated to"), ALL element indexes from BEFORE that navigation are INVALID and must NOT be used again. Always pick indexes ONLY from the CURRENT ELEMENTS LIST shown in this observation.',
     '  - If the task is complete or impossible, use "done". Output ONLY the JSON value — no other text.',
     '=== MULTI-ACTION OUTPUT (BATCHING) ===',
-    '  - BATCHING RULE: You MAY return SEVERAL actions in ONE response using the "actions" array, and the agent runs them in order WITHOUT calling you again. This saves round-trips — prefer it when you can already see every element you need in the CURRENT elements list. Only batch actions whose "index" is ALREADY in the current list and that do NOT depend on an earlier action changing the page first.',
-    '  - BATCH-SAFE actions (chain as many as you need, then finish): `select`, `input`, `clear`, `scroll`, `hover`, `press_key`, plus a final `done`. Their indexes stay valid because they do not renumber the page.',
-    '  - BATCH-STOP actions: `navigate`, and EVERY `click` (a click may open a menu/dialog or load a new page and RENUMBER all indexes). A `navigate` or `click` MUST be the LAST action in the array — never put another action after it. If unsure whether later indexes survive, return just ONE action and you will be asked again after the page updates.',
-    ...(singleCallMode
-      ? [
-          '  - SINGLE-CALL MODE: You will be called only once for this task. Return the full action plan from the current observation so the task can finish without another model call.',
-          '  - In single-call mode, prefer one `actions` array that includes all needed fills/selects and exactly one final submit/click/done flow if applicable.',
-          '  - Never emit repeated identical clicks, especially repeated submit clicks.',
-          '  - IMPOSSIBLE OR QUESTION: If the request cannot be satisfied on this page (no matching page, section, or control exists — e.g. the user names something that is not present), OR the user is ASKING a question rather than requesting an action, return ONE `done` whose `result` clearly explains the situation (and lists what IS available) or answers the question. Do NOT invent an action or click an unrelated element.',
-        ]
-      : []),
+    '  - BATCHING RULE: Return ALL the actions needed for the task in ONE "actions" array, in order — the agent runs them without asking you again. Only include actions whose "index" is ALREADY in the CURRENT elements list and that do NOT depend on an earlier action first changing the page.',
+    '  - SAFE-TO-CHAIN actions (chain as many as you need, then finish with `done`): `select`, `input`, `clear`, `scroll`, `hover`, `press_key`. Their indexes stay valid because they do not renumber the page.',
+    '  - PAGE-CHANGING actions: a `click` may open a menu/dialog that adds elements. If you must click to reach a specific item, put that `click` LAST in the array (the agent will handle the menu that opens). Do NOT plan further indexed actions after a `click`, because the indexes you see now may no longer be valid.',
+    '  - IMPOSSIBLE OR QUESTION: If the request cannot be satisfied on this page (no matching page, section, or control exists — e.g. the user names something that is not present), OR the user is ASKING a question rather than requesting an action, return ONE `done` whose `result` clearly explains the situation (and lists what IS available) or answers the question. Do NOT invent an action or click an unrelated element.',
     '=== TASK DECOMPOSITION ===',
     '  - REQUEST DECOMPOSITION RULE: A request such as "show me <qualifier> <entity>" (e.g. "show approved orders", "active users", "pending requests", "laptops in products") combines TWO parts: (a) a TARGET SECTION = the entity noun (orders / users / requests / products) and (b) a QUALIFIER = the adjective, status, or keyword (approved / active / pending / laptops). Resolve them strictly in this order:\n      step 1 — LOCATE THE SECTION: compare the entity noun against the CURRENT Page title/URL. If they already match (you are on that section), do NOT navigate — skip to step 2. If they do NOT match, get onto that section first: use `navigate` if the entity matches a KNOWN PAGE PATHS label, otherwise `click` a sidebar/nav link whose label matches the entity.\n      step 2 — APPLY THE QUALIFIER on that page: if the qualifier is one of a FILTER DROPDOWN\'s fixed options, use the STATUS FILTER RULE (`select`); if it is free text, use the KEYWORD SEARCH RULE (`input`).\n      Never apply the qualifier before you are on the correct section, and never call `done` after only navigating if a qualifier still needs to be applied. Do NOT assume the qualifier requires a brand-new page when a FILTER DROPDOWN or SEARCH BOX on the current page can satisfy it.',
     '  - CROSS-PAGE NAVIGATION: If the task says "in <section>" or "on <page>" (e.g. "in orders", "in settings", "on the users page") and the current page URL/title does NOT match that section, you MUST navigate there first. Find a sidebar/nav link whose label matches the section name and `click` it. Only after landing on the correct page should you look for tabs, filters, or items.',
@@ -152,11 +149,11 @@ export function buildPrompt(
     '  - AMBIGUOUS MATCH RULE: If multiple elements could match the request, prefer (a) elements inside the active [MODAL] when one is open, (b) elements whose label most specifically matches the user\'s words, (c) the most recently rendered (later in the list).',
     '  - DISABLED ELEMENTS: Never click/input on an element marked "(disabled)" or "(readonly)". If the only available action targets a disabled element, call `done` explaining why the task cannot proceed.',
     ...navigationRules,
-    'Example: {"thought":"Click the submit button","action":"click","args":{"index":4}}',
-    'Example: {"thought":"User asked for items with a specific status; select it on the status FILTER DROPDOWN","action":"select","args":{"index":7,"value":"<requested status>"}}',
-    'Example: {"thought":"Request pairs a value with the field name of dropdown 9; this is a filter, not a section","action":"select","args":{"index":9,"value":"<the value words>"}}',
-    'Example: {"thought":"User asked to export the current table; click the export button","action":"click","args":{"index":12}}',
-    'Example (batch — two filters then finish in ONE response): {"thought":"Apply both requested filters, then done","actions":[{"action":"select","args":{"index":7,"value":"<status value>"}},{"action":"select","args":{"index":9,"value":"<type value>"}},{"action":"done","args":{"result":"Filtered."}}]}',
+    'Example (single action still uses the array form): {"thought":"Click the submit button","actions":[{"action":"click","args":{"index":4}},{"action":"done","args":{"result":"Submitted the form."}}]}',
+    'Example (status filter): {"thought":"select the requested status then finish","actions":[{"action":"select","args":{"index":7,"value":"<requested status>"}},{"action":"done","args":{"result":"Filtered by status."}}]}',
+    'Example (value paired with a dropdown field name is a filter, not a section): {"thought":"apply the matching filter then finish","actions":[{"action":"select","args":{"index":9,"value":"<the value words>"}},{"action":"done","args":{"result":"Filtered."}}]}',
+    'Example (export): {"thought":"click the export button","actions":[{"action":"click","args":{"index":12}},{"action":"done","args":{"result":"Exported the table."}}]}',
+    'Example (two filters then finish in ONE response): {"thought":"apply both requested filters, then done","actions":[{"action":"select","args":{"index":7,"value":"<status value>"}},{"action":"select","args":{"index":9,"value":"<type value>"}},{"action":"done","args":{"result":"Filtered."}}]}',
   ]
 
   // ── Conditional rule pruning ──────────────────────────────────
@@ -197,7 +194,7 @@ export function buildPrompt(
     observation.elementsText || '(none found)',
     'History:',
     formatHistory(history),
-    'Your JSON action:',
+    'Your JSON response (an object with an "actions" array):',
   ].join('\n\n')
 
   return [

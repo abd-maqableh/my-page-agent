@@ -44,13 +44,14 @@ describe('buildPrompt', () => {
     expect(withoutExport.content).not.toContain('EXPORT RULE')
   })
 
-  it('documents batched multi-action output and the multi-filter rule', () => {
+  it('documents the strict object response format and the multi-filter rule', () => {
     const [systemMessage] = buildPrompt('show ready for signature exploration license applications', observation, [])
 
-    expect(systemMessage.content).toContain('Multiple actions:')
+    expect(systemMessage.content).toContain('RESPONSE FORMAT')
+    expect(systemMessage.content).toContain('"actions"')
     expect(systemMessage.content).toContain('BATCHING RULE')
-    expect(systemMessage.content).toContain('BATCH-SAFE actions')
-    expect(systemMessage.content).toContain('BATCH-STOP actions')
+    expect(systemMessage.content).toContain('SAFE-TO-CHAIN actions')
+    expect(systemMessage.content).toContain('PAGE-CHANGING actions')
     expect(systemMessage.content).toContain('MULTI-FILTER RULE')
   })
 

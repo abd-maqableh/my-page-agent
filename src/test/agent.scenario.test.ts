@@ -138,31 +138,13 @@ describe('agent scenarios', () => {
       apiKey: 'NA',
       model: 'test-model',
       llmClient: new ScriptedLLMClient([
-        {
-          thought: 'Fill name',
-          action: 'input',
-          args: { index: 1, text: 'Mona' },
-        },
-        {
-          thought: 'Fill email',
-          action: 'input',
-          args: { index: 2, text: 'mona@example.com' },
-        },
-        {
-          thought: 'Pick role',
-          action: 'select',
-          args: { index: 3, value: 'Designer' },
-        },
-        {
-          thought: 'Submit form',
-          action: 'click',
-          args: { index: 4 },
-        },
-        {
-          thought: 'Done',
-          action: 'done',
-          args: { result: 'Submitted demo form.' },
-        },
+        [
+          { thought: 'Fill the form then submit', action: 'input', args: { index: 1, text: 'Mona' } },
+          { action: 'input', args: { index: 2, text: 'mona@example.com' } },
+          { action: 'select', args: { index: 3, value: 'Designer' } },
+          { action: 'click', args: { index: 4 } },
+          { action: 'done', args: { result: 'Submitted demo form.' } },
+        ],
       ]),
       maxSteps: 8,
     })
@@ -184,16 +166,10 @@ describe('agent scenarios', () => {
       apiKey: 'NA',
       model: 'test-model',
       llmClient: new ScriptedLLMClient([
-        {
-          thought: 'Click notification button',
-          action: 'click',
-          args: { index: 5 },
-        },
-        {
-          thought: 'Done',
-          action: 'done',
-          args: { result: 'Notification clicked.' },
-        },
+        [
+          { thought: 'Click notification button', action: 'click', args: { index: 5 } },
+          { action: 'done', args: { result: 'Notification clicked.' } },
+        ],
       ]),
       maxSteps: 4,
     })
@@ -205,7 +181,7 @@ describe('agent scenarios', () => {
     expect(snapshot.output).toBe('Notification button clicked.')
   })
 
-  it('applies multiple filters one at a time, driven by the model', async () => {
+  it('applies multiple filters from a single batched model response', async () => {
     HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
       return {
         x: 0,
@@ -246,9 +222,11 @@ describe('agent scenarios', () => {
     `
 
     const client = new CountingScriptedLLMClient([
-      { thought: 'Apply the type filter', action: 'select', args: { index: 1, value: 'Mining License' } },
-      { thought: 'Apply the status filter', action: 'select', args: { index: 2, value: 'Completed' } },
-      { thought: 'Done', action: 'done', args: { result: 'Filtered.' } },
+      [
+        { thought: 'Apply both filters then finish', action: 'select', args: { index: 1, value: 'Mining License' } },
+        { action: 'select', args: { index: 2, value: 'Completed' } },
+        { action: 'done', args: { result: 'Filtered.' } },
+      ],
     ])
 
     const agent = new MyPageAgent({
@@ -265,8 +243,8 @@ describe('agent scenarios', () => {
     expect(result.status).toBe('done')
     expect(selects[0].value).toBe('Mining License')
     expect(selects[1].value).toBe('Completed')
-    // Exactly the three scripted turns — no extra auto-injected model calls.
-    expect(client.calls).toBe(3)
+    // The whole batch ran from ONE API round-trip.
+    expect(client.calls).toBe(1)
   })
 
   it('applies a single filter without touching the other dropdowns', async () => {
@@ -309,8 +287,10 @@ describe('agent scenarios', () => {
     `
 
     const client = new CountingScriptedLLMClient([
-      { thought: 'Select the requested status', action: 'select', args: { index: 2, value: 'Rejected' } },
-      { thought: 'Done', action: 'done', args: { result: 'Filtered.' } },
+      [
+        { thought: 'Select the requested status then finish', action: 'select', args: { index: 2, value: 'Rejected' } },
+        { action: 'done', args: { result: 'Filtered.' } },
+      ],
     ])
 
     const agent = new MyPageAgent({
@@ -325,80 +305,10 @@ describe('agent scenarios', () => {
     const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
 
     expect(result.status).toBe('done')
-    // Only one qualifier was requested, so the done-gate finds NO leftover task
-    // words and accepts done without touching the other dropdown — no extra call.
+    // Only the requested dropdown was touched; the other stays at its default.
     expect(selects[1].value).toBe('Rejected')
     expect(selects[0].value).toBe('All')
-    expect(client.calls).toBe(2)
-  })
-
-  it('deterministically applies a missing second filter after an early done (JSON-mode behavior)', async () => {
-    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
-      return {
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 240,
-        bottom: 48,
-        width: 240,
-        height: 48,
-        toJSON() {
-          return this
-        },
-      } as DOMRect
-    }
-
-    document.body.innerHTML = `
-      <main>
-        <label>
-          Request Type
-          <select>
-            <option>All</option>
-            <option>Mining License</option>
-            <option>Exploration License</option>
-            <option>License Renewal</option>
-          </select>
-        </label>
-        <label>
-          Final Status
-          <select>
-            <option>All</option>
-            <option>Completed</option>
-            <option>Rejected</option>
-            <option>Conditional Approval</option>
-          </select>
-        </label>
-      </main>
-    `
-
-    // Simulates the terse JSON-mode model: applies ONE filter, then calls done and
-    // drops the second — and keeps saying done. The done-gate must apply the missing
-    // type filter DETERMINISTICALLY (no further model turn that picks it).
-    const client = new CountingScriptedLLMClient([
-      { thought: 'Apply status', action: 'select', args: { index: 2, value: 'Completed' } },
-      { thought: 'Done', action: 'done', args: { result: 'Filtered by status.' } },
-      // Even if asked again, the lazy model just says done — the gate handles it.
-      { thought: 'Still done', action: 'done', args: { result: 'Filtered by status.' } },
-      { thought: 'Still done', action: 'done', args: { result: 'Filtered by status.' } },
-    ])
-
-    const agent = new MyPageAgent({
-      baseURL: 'http://localhost:11434/v1',
-      apiKey: 'NA',
-      model: 'test-model',
-      llmClient: client,
-      maxSteps: 8,
-    })
-
-    const result = await agent.execute('Show completed mining license requests')
-    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
-
-    expect(result.status).toBe('done')
-    // BOTH filters end up applied — the type filter was applied by the deterministic
-    // done-gate using the leftover task word "mining license".
-    expect(selects[0].value).toBe('Mining License')
-    expect(selects[1].value).toBe('Completed')
+    expect(client.calls).toBe(1)
   })
 
   it('applies two filters and finishes from a SINGLE batched model response', async () => {
@@ -469,73 +379,6 @@ describe('agent scenarios', () => {
     expect(client.calls).toBe(1)
   })
 
-  it('single-call mode applies task-named filters deterministically even if the model returns a stray action', async () => {
-    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
-      return {
-        x: 0,
-        y: 0,
-        top: 0,
-        left: 0,
-        right: 240,
-        bottom: 48,
-        width: 240,
-        height: 48,
-        toJSON() {
-          return this
-        },
-      } as DOMRect
-    }
-
-    document.body.innerHTML = `
-      <main>
-        <label>
-          Request Type
-          <select>
-            <option>All</option>
-            <option>Mining License</option>
-            <option>Exploration License</option>
-          </select>
-        </label>
-        <label>
-          Region
-          <select>
-            <option>All</option>
-            <option>Northern</option>
-            <option>Southern</option>
-            <option>Central</option>
-          </select>
-        </label>
-        <button type="button">Reset</button>
-      </main>
-    `
-
-    // Mirrors the reported bug: a terse single-call model CLICKS a filter dropdown
-    // instead of selecting a value. That click on a FILTER DROPDOWN is real filter
-    // intent, so deterministic completion must finish the job — applying BOTH
-    // "Mining License" and "Southern" from the task — with no extra model call.
-    const client = new CountingScriptedLLMClient([
-      { thought: 'guessing', action: 'click', args: { index: 1 } },
-    ])
-
-    const agent = new MyPageAgent({
-      baseURL: 'http://localhost:11434/v1',
-      apiKey: 'NA',
-      model: 'test-model',
-      llmClient: client,
-      singleLLMCall: true,
-      maxSteps: 4,
-    })
-
-    const result = await agent.execute('Show me the Mining License of Southern on government followup page')
-    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
-
-    expect(result.status).toBe('done')
-    expect(selects[0].value).toBe('Mining License')
-    expect(selects[1].value).toBe('Southern')
-    // Exactly ONE model round-trip — the filters were applied without the model.
-    expect(client.calls).toBe(1)
-  })
-
   it('single-call mode surfaces the model\u2019s done message for an impossible request', async () => {
     HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
       return {
@@ -580,7 +423,6 @@ describe('agent scenarios', () => {
       apiKey: 'NA',
       model: 'test-model',
       llmClient: client,
-      singleLLMCall: true,
       maxSteps: 4,
     })
 
@@ -594,5 +436,139 @@ describe('agent scenarios', () => {
     // No filter was applied for an impossible request.
     expect(selects[0].value).toBe('All')
     expect(client.calls).toBe(1)
+  })
+
+  it('resolves a pure navigation request with ZERO model calls', async () => {
+    window.history.pushState({}, '', '/applications')
+    document.body.innerHTML = '<main><h1>Applications</h1></main>'
+
+    const client = new CountingScriptedLLMClient([])
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      pages: { Applications: '/applications', Dashboard: '/dashboard' },
+    })
+
+    const result = await agent.execute('go to applications')
+
+    expect(result.status).toBe('done')
+    // The deterministic router handled it — the model was never consulted.
+    expect(client.calls).toBe(0)
+    expect(result.message.toLowerCase()).toContain('applications')
+  })
+
+  it('synthesizes a Done message when the model omits a done action', async () => {
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 240,
+        bottom: 48,
+        width: 240,
+        height: 48,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+
+    document.body.innerHTML = `
+      <main>
+        <label>
+          Request Type
+          <select>
+            <option>All</option>
+            <option>Mining License</option>
+          </select>
+        </label>
+        <label>
+          Final Status
+          <select>
+            <option>All</option>
+            <option>Completed</option>
+            <option>Rejected</option>
+          </select>
+        </label>
+      </main>
+    `
+
+    // The model returns ONLY a select (no trailing done). The agent must still
+    // finish and synthesize a message from the last successful action.
+    const client = new CountingScriptedLLMClient([
+      { thought: 'apply the status', action: 'select', args: { index: 2, value: 'Rejected' } },
+    ])
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      maxSteps: 4,
+    })
+
+    const result = await agent.execute('Show rejected requests')
+    const selects = Array.from(document.querySelectorAll('select')) as HTMLSelectElement[]
+
+    expect(result.status).toBe('done')
+    expect(selects[1].value).toBe('Rejected')
+    expect(result.message).toContain('Selected')
+    expect(client.calls).toBe(1)
+  })
+
+  it('surfaces an LLM error as an error result (no retries)', async () => {
+    document.body.innerHTML = '<main><button type="button">Hi</button></main>'
+
+    let calls = 0
+    const client: LLMClient = {
+      async getNextActions() {
+        calls += 1
+        throw new Error('LLM request timed out after 120000ms.')
+      },
+    }
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+    })
+
+    const result = await agent.execute('do something')
+
+    expect(result.status).toBe('error')
+    expect(result.message).toContain('timed out')
+    // One call only — no automatic retry loop.
+    expect(calls).toBe(1)
+  })
+
+  it('falls through to a single model call when the requested page is unknown', async () => {
+    document.body.innerHTML = '<main><button type="button">Reset</button></main>'
+
+    const client = new CountingScriptedLLMClient([
+      {
+        thought: 'no such page',
+        action: 'done',
+        args: { result: 'There is no billing page. Available pages: Applications, Dashboard.' },
+      },
+    ])
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      pages: { Applications: '/applications', Dashboard: '/dashboard' },
+    })
+
+    const result = await agent.execute('go to the billing page')
+
+    expect(result.status).toBe('done')
+    // Unknown page → no deterministic navigation, exactly one model call.
+    expect(client.calls).toBe(1)
+    expect(result.message.toLowerCase()).toContain('billing')
   })
 })

@@ -225,7 +225,7 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "2559294628179938479"
+          "hash": "9773301453172686430"
         },
         {
           "file": "src/core/intentRouter.ts",
@@ -233,7 +233,7 @@
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "12812920759871736628"
+          "hash": "15219804789377879494"
         },
         {
           "file": "src/core/text.ts",
@@ -245,7 +245,7 @@
         },
         {
           "file": "src/core/types.ts",
-          "hash": "11395967920086266618"
+          "hash": "10112184321374083446"
         },
         {
           "file": "src/index.ts",
@@ -253,7 +253,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "10698435444454836417"
+          "hash": "1229191095287678605"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -265,11 +265,11 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "10560784081248225978"
+          "hash": "7899716476864283041"
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "152103051405390178"
+          "hash": "4473740553373593260"
         },
         {
           "file": "src/page-controller/domScanner.ts",
@@ -285,7 +285,7 @@
         },
         {
           "file": "src/test/agent.scenario.test.ts",
-          "hash": "17163814259954852146",
+          "hash": "12149867738461712155",
           "deps": [
             "npm:vitest"
           ]
@@ -306,7 +306,7 @@
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "17829161275792066334",
+          "hash": "8061599090539466587",
           "deps": [
             "npm:vitest"
           ]
