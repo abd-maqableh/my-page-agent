@@ -34,6 +34,13 @@ export interface PageElementSummary {
   role?: string | null
   type?: string | null
   label: string
+  description?: string
+  /**
+   * Whether this entry is an actionable control or a scroll-only page landmark.
+   * Used to group the serialized observation into clearly separated blocks so the
+   * model never clicks a SECTION when it should select/filter.
+   */
+  kind?: 'interactive' | 'section'
 }
 
 export interface PageObservation {
@@ -72,6 +79,12 @@ export interface AgentHistoryEntry {
 export interface AgentCallbacks {
   onStatus?: (status: string) => void
   onStep?: (entry: AgentHistoryEntry) => void
+  /**
+   * Two-phase flow only. Called after Phase 1 navigation so the host can
+   * show the iframe and wait for it to load, then resolve the promise to
+   * signal Phase 2 can start scanning the new DOM.
+   */
+  onPageReady?: () => Promise<void>
 }
 
 export interface AgentRunResult {
@@ -146,6 +159,20 @@ export interface AgentConfigBase {
   llmClient?: LLMClient
   maxSteps?: number
   callbacks?: AgentCallbacks
+  /**
+   * When true, `execute()` uses a two-phase flow:
+   *   Phase 1 — LLM picks the target page (navigate only, no DOM)
+   *   Phase 2 — iframe loads, host resolves `onPageReady`, LLM interacts
+   *             with the freshly-scanned DOM of the correct page.
+   * Requires `callbacks.onPageReady` to be set.
+   */
+  twoPhase?: boolean
+  /**
+   * The iframe's initial URL, provided by the host component. Used as a
+   * fallback when the iframe is cross-origin and `contentWindow.location`
+   * is inaccessible. The agent keeps this updated after each navigation.
+   */
+  currentUrl?: string
   /**
    * Optional gate invoked before every action is executed. Return false (or a
    * Promise resolving to false) to abort the run. Useful for blocking

@@ -225,15 +225,11 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "9773301453172686430"
-        },
-        {
-          "file": "src/core/intentRouter.ts",
-          "hash": "14532843521747288428"
+          "hash": "9308327199767310147"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "15219804789377879494"
+          "hash": "15742597271404211703"
         },
         {
           "file": "src/core/text.ts",
@@ -245,11 +241,11 @@
         },
         {
           "file": "src/core/types.ts",
-          "hash": "10112184321374083446"
+          "hash": "4665264376321474539"
         },
         {
           "file": "src/index.ts",
-          "hash": "7973968497885653950"
+          "hash": "17321903042483971600"
         },
         {
           "file": "src/llm/OpenAIClient.ts",
@@ -265,34 +261,23 @@
         },
         {
           "file": "src/page-controller/PageController.ts",
-          "hash": "7899716476864283041"
+          "hash": "13723224251308525664"
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "4473740553373593260"
+          "hash": "17155612139753838840"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "2098637059840518528"
+          "hash": "6454925841453506712"
         },
         {
           "file": "src/style.css",
           "hash": "15270870770049546504"
         },
         {
-          "file": "src/test/admin-yallgo.code-workspace",
-          "hash": "17456431352775212755"
-        },
-        {
           "file": "src/test/agent.scenario.test.ts",
-          "hash": "12149867738461712155",
-          "deps": [
-            "npm:vitest"
-          ]
-        },
-        {
-          "file": "src/test/intent-router.test.ts",
-          "hash": "3795771309978208962",
+          "hash": "8163050350676881922",
           "deps": [
             "npm:vitest"
           ]
@@ -306,7 +291,7 @@
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "8061599090539466587",
+          "hash": "2891173240319587739",
           "deps": [
             "npm:vitest"
           ]

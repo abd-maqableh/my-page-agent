@@ -234,7 +234,7 @@ async function selectOnDropdown(
   return {
     success: false,
     availableOptions: [],
-    message: `Element ${index} is not a FILTER DROPDOWN — the select action only works on dropdown/combobox elements. To choose a filter value, target the element labelled "FILTER DROPDOWN:". If no suitable filter exists, call done.`,
+    message: `Element ${index} is not a dropdown/combobox. The select action only works on dropdown elements. Choose a dropdown element and retry, or call done if none exists.`,
   };
 }
 
@@ -397,14 +397,65 @@ async function doSelect(
   doc: Document,
   win: Window & typeof globalThis,
 ): Promise<ActionExecutionResult> {
-  const el = getElement(index, args, elementMap);
-
   if (!value) {
     throw new Error("Missing required arg: value");
   }
 
+  let el = getElement(index, args, elementMap);
+
+  // ROBUST TARGET RESOLUTION (executes the model's choice faithfully, does not
+  // decide for it): small models sometimes attach a correct `select` value to a
+  // slightly-wrong index (a nearby button/label instead of the dropdown div). If
+  // the targeted element is not itself a usable dropdown, redirect to the FILTER
+  // DROPDOWN whose OWN options actually include the requested value — so we only
+  // ever act on a control that genuinely offers what the model asked for.
+  if (!isDropdownLike(el)) {
+    const alt = findDropdownForValue(elementMap, value);
+    if (alt) el = alt;
+  }
+
   const result = await selectOnDropdown(el, index, value, doc, win);
   return { success: result.success, message: result.message };
+}
+
+/** A native <select> or any element exposing the combobox role. */
+function isDropdownLike(el: Element): boolean {
+  return (
+    el.tagName.toLowerCase() === "select" ||
+    el.getAttribute("role") === "combobox"
+  );
+}
+
+/** The option labels a dropdown advertises, WITHOUT opening it. */
+function dropdownOptionTexts(el: Element): string[] {
+  if (el.tagName.toLowerCase() === "select") {
+    return Array.from((el as HTMLSelectElement).options).map(
+      (o) => o.textContent ?? "",
+    );
+  }
+  return [];
+}
+
+/**
+ * Find the dropdown in the current observation whose advertised options include
+ * `value`. Used only as a rescue when the model targeted a non-dropdown element —
+ * we never override a valid target, we only recover an invalid one by honoring
+ * the model's requested VALUE.
+ */
+function findDropdownForValue(
+  elementMap: Map<number, Element>,
+  value: string,
+): Element | null {
+  const v = normalizeText(value);
+  if (!v) return null;
+  for (const el of elementMap.values()) {
+    if (!isDropdownLike(el)) continue;
+    const opts = dropdownOptionTexts(el).map(normalizeText);
+    if (opts.some((o) => o && (o === v || o.includes(v) || v.includes(o)))) {
+      return el;
+    }
+  }
+  return null;
 }
 
 function doScroll(

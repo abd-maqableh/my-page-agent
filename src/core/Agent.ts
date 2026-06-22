@@ -1,8 +1,6 @@
 import { createLLMClient } from "../llm/createLLMClient";
 import { PageController } from "../page-controller/PageController";
-import { buildPrompt } from "./prompt";
-import { isOnPath, resolveIntent } from "./intentRouter";
-import { looseMatch } from "./text";
+import { buildNavigationPrompt, buildInteractionPrompt } from "./prompt";
 import type {
   ActionExecutionResult,
   ActionQueueResult,
@@ -28,20 +26,45 @@ function collectDeclaredSections(pages: AgentConfig["pages"]): string[] {
   return names;
 }
 
+/** Match the current page URL against known pages. */
+function findMatchingPage(
+  currentUrl: string,
+  pages: AgentConfig["pages"],
+): { name: string; path: string } | null {
+  if (!pages || !currentUrl) return null;
+  try {
+    const currentPath = new URL(currentUrl, window.location.origin).pathname;
+    for (const [name, value] of Object.entries(pages)) {
+      const candidate = typeof value === "string" ? value : value.path;
+      // Exact match or current path starts with candidate (with path-segment
+      // boundary so /dashboard doesn't match /dashboard/settings).
+      if (
+        currentPath === candidate ||
+        (currentPath.startsWith(candidate) &&
+          currentPath.charAt(candidate.length) === "/")
+      ) {
+        return { name, path: candidate };
+      }
+    }
+    // Fallback: starts-with without boundary (less strict).
+    for (const [name, value] of Object.entries(pages)) {
+      const candidate = typeof value === "string" ? value : value.path;
+      if (currentPath.startsWith(candidate)) {
+        return { name, path: candidate };
+      }
+    }
+  } catch {
+    // currentUrl was not a valid URL — ignore.
+  }
+  return null;
+}
+
 /**
- * One request → (optional deterministic navigation) → ONE LLM call → run plan.
+ * One request -> two LLM calls (when twoPhase is enabled):
+ *   Phase 1 — navigation only (no DOM, pages config only)
+ *   Phase 2 — interaction on the freshly-loaded target page DOM
  *
- * The flow is deliberately flat and predictable:
- *   1. NAVIGATION is deterministic (no LLM): if the task names a known page/section
- *      (via `resolveIntent`), navigate there directly. A request that is ONLY
- *      navigation finishes here with ZERO model calls.
- *   2. ACTION PHASE is exactly ONE model call: observe the page (domScanner),
- *      build one clear prompt, ask the model once, then execute the returned
- *      action plan in order as a queue.
- *
- * There is NO re-ask loop. Whatever the model returns is what runs — this is what
- * eliminates the "apply filter → remove filter → apply …" oscillation that a
- * multi-call loop produced.
+ * Falls back to single-call mode when twoPhase is not set.
  */
 export class Agent {
   private readonly client: LLMClient;
@@ -49,6 +72,7 @@ export class Agent {
   private readonly callbacks?: AgentConfig["callbacks"];
   private readonly confirmAction?: AgentConfig["confirmAction"];
   private readonly pages?: AgentConfig["pages"];
+  private readonly twoPhase: boolean;
 
   constructor(config: AgentConfig) {
     this.client = config.llmClient ?? createLLMClient(config);
@@ -56,28 +80,321 @@ export class Agent {
       config.targetFrame,
       collectDeclaredSections(config.pages),
     );
+    if (config.currentUrl) {
+      this.pageController.setFallbackUrl(config.currentUrl);
+    }
     this.callbacks = config.callbacks;
     this.confirmAction = config.confirmAction;
     this.pages = config.pages;
+    this.twoPhase = config.twoPhase ?? false;
   }
 
   async execute(task: string): Promise<AgentRunResult> {
     if (!task.trim()) {
       throw new Error("Task is required.");
     }
+    return this.twoPhase && this.pages && this.callbacks?.onPageReady
+      ? this.executeTwoPhase(task)
+      : this.executeSinglePhase(task);
+  }
 
+  // ─── Two-phase flow ────────────────────────────────────────────────────────
+
+  private async executeTwoPhase(task: string): Promise<AgentRunResult> {
     const history: AgentHistoryEntry[] = [];
 
-    // ── 1. Deterministic navigation prefix (no LLM) ──────────────────
-    const navOutcome = await this.runNavigationPrefix(task, history);
-    if (navOutcome.terminal) return navOutcome.terminal;
+    // ── Phase 1: navigate ───────────────────────────────────────────────────
+    const currentUrl = this.pageController.getEffectiveUrl();
+    const matchedPage = findMatchingPage(currentUrl, this.pages);
 
-    // ── 2. Action phase: exactly ONE model call ──────────────────────
+    // Check whether the task explicitly asks for a different page.
+    const taskLower = task.toLowerCase();
+    const asksForOtherPage =
+      this.pages &&
+      Object.keys(this.pages).some((name) => {
+        if (matchedPage && name === matchedPage.name) return false;
+        return taskLower.includes(name.toLowerCase());
+      });
+
+    // Skip Phase 1 LLM navigation when already on the correct page and the
+    // task doesn't explicitly request a different one.
+    //
+    // SAFETY: if the matched page declares sections but the task mentions none
+    // of them, the task likely targets a DIFFERENT page (staying on a
+    // section-only page when the task needs filters/actions elsewhere would
+    // fail). Fall through to Phase 1 so the LLM can route correctly.
+    let taskMentionsCurrentSection = false;
+    if (matchedPage) {
+      const pageEntry = this.pages![matchedPage.name];
+      const sections =
+        typeof pageEntry === "string" ? [] : (pageEntry.sections ?? []);
+      taskMentionsCurrentSection = sections.some((s) =>
+        taskLower.includes(s.toLowerCase()),
+      );
+    }
+
+    const shouldSkipNavigation =
+      matchedPage &&
+      !asksForOtherPage &&
+      // If page has sections and task mentions none, route through Phase 1
+      (!matchedPage || taskMentionsCurrentSection);
+
+    if (shouldSkipNavigation) {
+      this.callbacks?.onStatus?.(
+        `Already on "${matchedPage.name}" — skipping navigation`,
+      );
+      // Push a synthetic history entry so Phase 2 knows navigation was handled.
+      this.pushHistory(
+        history,
+        0,
+        "(already on correct page)",
+        {
+          action: "navigate",
+          args: { url: matchedPage.path },
+        },
+        {
+          success: true,
+          message: `Already on "${matchedPage.name}" (${matchedPage.path}) — skipped navigation.`,
+        },
+      );
+    } else {
+      this.callbacks?.onStatus?.("Deciding target page");
+      const navMessages = buildNavigationPrompt(task, this.pages!, currentUrl);
+
+      let navActions: AgentAction[];
+      try {
+        navActions = await this.client.getNextActions(navMessages);
+      } catch (error) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to get navigation action",
+        };
+      }
+
+      if (navActions.length === 0) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message: "Model returned no navigation action.",
+        };
+      }
+
+      // Validate: first action must be navigate
+      const navAction = navActions.find((a) => a.action === "navigate");
+      if (!navAction) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message: "Model did not return a navigate action in Phase 1.",
+        };
+      }
+
+      if (this.confirmAction && !(await this.confirmAction(navAction))) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message: "Navigation was rejected by confirmAction.",
+        };
+      }
+
+      this.callbacks?.onStatus?.("Navigating to page");
+      const navQueue = await this.pageController.executeActionQueue([
+        navAction,
+      ]);
+
+      navQueue.items.forEach((item, index) => {
+        this.pushHistory(
+          history,
+          index + 1,
+          "(navigation phase — no DOM)",
+          item.action,
+          item.result,
+        );
+      });
+
+      if (navQueue.error) {
+        this.callbacks?.onStatus?.("Error");
+        return { status: "error", history, message: navQueue.error };
+      }
+
+      // Update fallback URL after successful navigation.
+      const navUrl = navAction.args?.url;
+      if (navUrl) {
+        try {
+          const resolved = new URL(navUrl, window.location.origin);
+          this.pageController.setFallbackUrl(
+            `${resolved.pathname}${resolved.search}${resolved.hash}`,
+          );
+        } catch {
+          if (navUrl.startsWith("/")) {
+            this.pageController.setFallbackUrl(navUrl);
+          }
+        }
+      }
+    }
+
+    // ── Wait for page to load ────────────────────────────────────────────────
+    if (!shouldSkipNavigation) {
+      // Page actually navigated — wait for the iframe to finish loading.
+      this.callbacks?.onStatus?.("Waiting for page");
+      await this.callbacks!.onPageReady!();
+    }
+    // Wait for lazy-loaded route components, React re-renders, and chart/layout
+    // sizing to settle before scanning. readyState=complete fires before SPA
+    // route chunks finish rendering, so without this wait the DOM only contains
+    // the app shell and sections/interactive elements are not yet mounted.
+    await this.pageController.waitForStability(300, 3000);
+
+    // ── Phase 2: iterative interaction loop ──────────────────────────────────
+    // Each iteration: re-scan DOM (fresh element indexes) → ask LLM for next
+    // batch → execute → repeat until `done` or maxSteps. Re-scanning before
+    // every LLM call ensures element references are never stale after a filter
+    // selection or any other action that causes React to re-render the page.
+    const maxSteps = 8;
+    let iterStep = 0;
+
+    while (iterStep < maxSteps) {
+      this.callbacks?.onStatus?.("Scanning page");
+      const observation = this.pageController.observe();
+
+      this.callbacks?.onStatus?.("Asking model");
+      const interactMessages = buildInteractionPrompt(
+        task,
+        observation,
+        this.pages,
+        history,
+      );
+
+      let interactActions: AgentAction[];
+      try {
+        interactActions = await this.client.getNextActions(interactMessages);
+      } catch (error) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to get interaction action",
+        };
+      }
+
+      if (interactActions.length === 0) {
+        this.callbacks?.onStatus?.("Error");
+        return {
+          status: "error",
+          history,
+          message: "Model returned no interaction actions.",
+        };
+      }
+
+      if (this.confirmAction) {
+        for (const action of interactActions) {
+          if (!(await this.confirmAction(action))) {
+            this.callbacks?.onStatus?.("Error");
+            return {
+              status: "error",
+              history,
+              message: `Action "${action.action}" was rejected by confirmAction.`,
+            };
+          }
+        }
+      }
+
+      this.callbacks?.onStatus?.("Executing actions");
+      // Strip navigate (Phase 2 must not reload the page) and stop the batch at
+      // the first `done` so we never execute actions after the model signals completion.
+      const safeActions = interactActions.filter(
+        (a) => a.action !== "navigate",
+      );
+      const batchToRun: AgentAction[] = [];
+      for (const a of safeActions) {
+        batchToRun.push(a);
+        if (a.action === "done") break;
+      }
+
+      const queue = await this.pageController.executeActionQueue(batchToRun);
+
+      const stepOffset = history.length;
+      queue.items.forEach((item, idx) => {
+        this.pushHistory(
+          history,
+          stepOffset + idx + 1,
+          observation.elementsText,
+          item.action,
+          item.result,
+        );
+      });
+
+      if (queue.error) {
+        this.callbacks?.onStatus?.("Error");
+        return { status: "error", history, message: queue.error };
+      }
+
+      // If the batch included `done`, the task is finished.
+      const doneItem = queue.items.find((i) => i.action.action === "done");
+      if (doneItem) {
+        this.callbacks?.onStatus?.("Done");
+        return { status: "done", history, message: this.resolveMessage(queue) };
+      }
+      // Auto-done safety net: the LLM forgot to include `done` in its batch.
+      // Two signals that the task is complete without another round-trip:
+      //   1. URL changed → filters applied or navigation happened
+      //   2. URL unchanged but this is the second+ iteration → LLM is looping
+      const postUrl = this.pageController.getEffectiveUrl();
+      const urlChanged = postUrl !== observation.url;
+      const hadInteraction = batchToRun.some((a) => a.action !== "wait");
+
+      // Derive the result message from the LLM's own words so it naturally
+      // matches the user's language (Arabic, English, etc.).
+      const llmMessage =
+        // Last action's thought (LLM-authored, in-task language)
+        batchToRun[batchToRun.length - 1]?.thought?.trim() ||
+        // or the last successful action's result message
+        [...queue.items].reverse().find((i) => i.result.success)?.result
+          .message ||
+        // final fallback
+        "Done";
+
+      if (urlChanged || (!urlChanged && hadInteraction && iterStep > 0)) {
+        this.callbacks?.onStatus?.("Done");
+        return { status: "done", history, message: llmMessage };
+      }
+
+      // Not done yet — wait for any async DOM updates triggered by the batch
+      // (filter API calls, React re-renders) before the next scan+ask cycle.
+      await this.pageController.waitForStability(300, 2000);
+      iterStep += 1;
+    }
+
+    // Reached max iterations without a done — return what we have.
+    this.callbacks?.onStatus?.("Done");
+    return {
+      status: "max_steps",
+      history,
+      message: "Reached maximum steps without completing the task.",
+    };
+  }
+
+  // ─── Single-phase flow (original) ─────────────────────────────────────────
+
+  private async executeSinglePhase(task: string): Promise<AgentRunResult> {
+    const history: AgentHistoryEntry[] = [];
+
     this.callbacks?.onStatus?.("Observing page");
     const observation = this.pageController.observe();
 
     this.callbacks?.onStatus?.("Asking model");
-    const messages = buildPrompt(task, observation, history, this.pages);
+    const messages = buildInteractionPrompt(task, observation, this.pages, []);
 
     let actions: AgentAction[];
     try {
@@ -114,7 +431,6 @@ export class Agent {
       }
     }
 
-    // ── 3. Execute the model's plan in order ─────────────────────────
     this.callbacks?.onStatus?.("Executing actions");
     const queue = await this.pageController.executeActionQueue(actions);
 
@@ -133,165 +449,12 @@ export class Agent {
       return { status: "error", history, message: queue.error };
     }
 
-    // ── 4. MENU AUTO-CLICK: a click that opened a per-item menu reveals
-    //       "MENU ITEM:" elements that did not exist at plan time. Click the
-    //       matching item now (based on task intent) — no extra model call. ──
-    const menuMessage = await this.maybeAutoClickMenu(task, history);
-
     this.callbacks?.onStatus?.("Done");
-    return {
-      status: "done",
-      history,
-      message: menuMessage ?? this.resolveMessage(queue),
-    };
+    return { status: "done", history, message: this.resolveMessage(queue) };
   }
 
-  /**
-   * Resolve known-page / declared-section navigation WITHOUT the LLM. Returns a
-   * terminal result when the request was purely navigation (or navigation
-   * failed); otherwise returns `{}` so the caller proceeds to the action phase.
-   */
-  private async runNavigationPrefix(
-    task: string,
-    history: AgentHistoryEntry[],
-  ): Promise<{ terminal?: AgentRunResult }> {
-    const routed = resolveIntent(task, this.pages);
-    if (!routed) return {};
+  // ─── Helpers ───────────────────────────────────────────────────────────────
 
-    let navigated = false;
-    if (!isOnPath(this.pageController.getUrl(), routed.path)) {
-      this.callbacks?.onStatus?.(`Navigating to ${routed.label}`);
-      const action: AgentAction = {
-        action: "navigate",
-        args: { url: routed.path },
-        thought: `Known page "${routed.label}"`,
-      };
-      if (this.confirmAction && !(await this.confirmAction(action))) {
-        return {
-          terminal: {
-            status: "error",
-            history,
-            message: 'Action "navigate" was rejected by confirmAction.',
-          },
-        };
-      }
-      const result = await this.pageController.executeAction(action);
-      this.pushHistory(history, 0, "", action, result);
-      await this.pageController.waitForStability();
-
-      // Fail loudly instead of silently "succeeding" on a navigation that did
-      // not actually land on the requested page.
-      if (!result.success || !isOnPath(this.pageController.getUrl(), routed.path)) {
-        this.callbacks?.onStatus?.("Error");
-        return {
-          terminal: {
-            status: "error",
-            history,
-            message: `Could not navigate to ${routed.label} (${routed.path}).`,
-          },
-        };
-      }
-      navigated = true;
-    }
-
-    // Declared section → scroll it into view deterministically.
-    let sectionFocused = false;
-    if (routed.section) {
-      const observation = this.pageController.observe();
-      const target = observation.elements.find(
-        (el) =>
-          el.label.startsWith("SECTION:") &&
-          looseMatch(el.label.slice("SECTION:".length), routed.section as string),
-      );
-      if (target) {
-        this.callbacks?.onStatus?.(`Focusing section ${routed.section}`);
-        const action: AgentAction = {
-          action: "scroll",
-          args: { index: target.index },
-          thought: `Declared section "${routed.section}"`,
-        };
-        const result = await this.pageController.executeAction(action);
-        this.pushHistory(history, 0.5, observation.elementsText, action, result);
-        sectionFocused = result.success;
-      }
-    }
-
-    // Pure navigation (and section focus, if asked) is complete — return now and
-    // never call the model. A task with leftover words falls through.
-    if (routed.complete && (!routed.section || sectionFocused)) {
-      this.callbacks?.onStatus?.("Done");
-      const suffix = routed.section ? ` — focused "${routed.section}"` : "";
-      return {
-        terminal: {
-          status: "done",
-          history,
-          message:
-            navigated || routed.section
-              ? `Navigated to ${routed.path}${suffix}`
-              : `Already on ${routed.label} (${routed.path})`,
-        },
-      };
-    }
-
-    return {};
-  }
-
-  /**
-   * After the plan runs, a click may have opened a per-item context menu whose
-   * "MENU ITEM:" options were not visible when the model planned. Click the
-   * option that matches the task intent (view / edit / first) so a request like
-   * "view the Dubai trip" completes from a single model call.
-   * Returns the chat message when it acted, else null.
-   */
-  private async maybeAutoClickMenu(
-    task: string,
-    history: AgentHistoryEntry[],
-  ): Promise<string | null> {
-    const observation = this.pageController.observe();
-    const menuItems = observation.elements.filter((el) =>
-      el.label.startsWith("MENU ITEM:"),
-    );
-    if (menuItems.length === 0) return null;
-
-    const taskLower = task.toLowerCase();
-    const isViewIntent = /\b(view|open|see|show|details?|look)\b/.test(taskLower);
-    const isEditIntent = /\b(edit|update|modify|change)\b/.test(taskLower);
-    const target =
-      menuItems.find(
-        (el) => isViewIntent && el.label.toLowerCase().includes("view"),
-      ) ??
-      menuItems.find(
-        (el) => isEditIntent && el.label.toLowerCase().includes("edit"),
-      ) ??
-      menuItems[0];
-
-    const action: AgentAction = {
-      action: "click",
-      args: { index: target.index },
-      thought: `Auto-clicked ${target.label}`,
-    };
-    if (this.confirmAction && !(await this.confirmAction(action))) return null;
-
-    const result = await this.pageController.executeAction(action);
-    await this.pageController.waitForStability();
-    this.pushHistory(
-      history,
-      history.length + 1,
-      observation.elementsText,
-      action,
-      result,
-    );
-    if (!result.success) return null;
-
-    return `Opened ${target.label.replace(/^MENU ITEM:\s*/, "")}`;
-  }
-
-  /**
-   * The chat-facing message, resolved in priority order:
-   *   1. an explicit `done` action's `result`,
-   *   2. the last successful (non-done) action's message,
-   *   3. a generic "Done" so the UI never blanks.
-   */
   private resolveMessage(queue: ActionQueueResult): string {
     const doneItem = [...queue.items]
       .reverse()
@@ -299,6 +462,14 @@ export class Agent {
     const doneText = doneItem?.action.args?.result?.trim();
     if (doneText) return doneText;
 
+    // Use last LLM-authored thought (in-task language) when no done text.
+    const lastActionWithThought = [...queue.items]
+      .reverse()
+      .find((i) => i.action.thought?.trim());
+    if (lastActionWithThought)
+      return lastActionWithThought.action.thought!.trim();
+
+    // Fall back to last successful action's result message.
     const lastSuccess = [...queue.items]
       .reverse()
       .find((i) => i.result.success && i.action.action !== "done");

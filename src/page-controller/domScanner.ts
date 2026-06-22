@@ -57,7 +57,7 @@ function isVisible(el: Element, win: Window & typeof globalThis): boolean {
   );
 }
 
-function stateSuffix(el: Element): string {
+function stateDetails(el: Element): string[] {
   const parts: string[] = [];
   const ariaDisabled = el.getAttribute("aria-disabled") === "true";
   const disabled = (el as HTMLInputElement).disabled === true || ariaDisabled;
@@ -100,44 +100,7 @@ function stateSuffix(el: Element): string {
     parts.push(el.checked ? "checked" : "unchecked");
   }
 
-  return parts.length ? ` (${parts.join(", ")})` : "";
-}
-
-function getInputPrefix(el: HTMLInputElement): string | null {
-  const type = (el.type || "text").toLowerCase();
-  switch (type) {
-    case "search":
-      return "SEARCH BOX";
-    case "date":
-    case "datetime-local":
-    case "time":
-    case "month":
-    case "week":
-      return "DATE PICKER";
-    case "file":
-      return "FILE UPLOAD";
-    case "number":
-    case "range":
-      return "NUMBER INPUT";
-    case "email":
-      return "EMAIL INPUT";
-    case "password":
-      return "PASSWORD INPUT";
-    case "tel":
-      return "PHONE INPUT";
-    case "url":
-      return "URL INPUT";
-    case "checkbox":
-      return "CHECKBOX";
-    case "radio":
-      return "RADIO";
-    case "submit":
-      return "SUBMIT BUTTON";
-    case "reset":
-      return "RESET BUTTON";
-    default:
-      return null;
-  }
+  return parts;
 }
 
 function looksLikeSearch(text: string): boolean {
@@ -220,116 +183,323 @@ function fieldNameFor(el: Element): string {
   return "";
 }
 
-function getLabel(el: Element): string {
-  const aria = el.getAttribute("aria-label")?.trim();
-  const labelledBy = ariaLabelledByText(el);
-  const title = el.getAttribute("title")?.trim();
-  const baseText = aria || labelledBy || title || "";
+function agentMetaCandidates(el: Element): Element[] {
+  const matches = new Set<Element>();
+  const HAS_AGENT_META =
+    "[data-agent-name], [data-agent-value], [data-agent-values], [data-agent-options], [data-agent-multiselect]";
 
-  // Native inputs
+  matches.add(el);
+  let node: Element | null = el.parentElement;
+  for (let depth = 0; node && depth < 5; depth += 1, node = node.parentElement) {
+    if (node.matches(HAS_AGENT_META)) matches.add(node);
+  }
+
+  el.querySelectorAll(HAS_AGENT_META).forEach((node) => matches.add(node));
+  return Array.from(matches);
+}
+
+function agentMetaText(el: Element, attr: string): string {
+  for (const node of agentMetaCandidates(el)) {
+    const val = cleanText(node.getAttribute(attr) || "");
+    if (val) return val;
+  }
+  return "";
+}
+
+function agentMetaList(el: Element, attr: string): string[] {
+  const values: string[] = [];
+  for (const node of agentMetaCandidates(el)) {
+    const raw = node.getAttribute(attr) || "";
+    if (!raw) continue;
+    raw
+      .split(",")
+      .map((s) => cleanText(s))
+      .filter(Boolean)
+      .forEach((s) => values.push(s));
+  }
+  return unique(values);
+}
+
+function agentMetaBool(el: Element, attr: string): boolean {
+  return agentMetaCandidates(el).some(
+    (node) => (node.getAttribute(attr) || "").toLowerCase() === "true",
+  );
+}
+
+function comboboxOptions(el: Element): string[] {
+  const declared = agentMetaList(el, "data-agent-options");
+
+  const doc = el.ownerDocument ?? document;
+  const opts: string[] = [];
+  const owns =
+    el.getAttribute("aria-controls") || el.getAttribute("aria-owns") || "";
+  for (const id of owns.split(/\s+/).filter(Boolean)) {
+    doc
+      .getElementById(id)
+      ?.querySelectorAll('[role="option"]')
+      .forEach((o) => {
+        const t = (o.textContent ?? "").replace(/\s+/g, " ").trim();
+        if (t) opts.push(t);
+      });
+  }
+  return unique([...declared, ...opts]);
+}
+
+function controlledListboxes(el: Element): Element[] {
+  const doc = el.ownerDocument ?? document;
+  const ids = `${el.getAttribute("aria-controls") || ""} ${el.getAttribute("aria-owns") || ""}`
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const nodes: Element[] = [];
+  for (const id of ids) {
+    const node = doc.getElementById(id);
+    if (node) nodes.push(node);
+  }
+  return nodes;
+}
+
+function selectedListboxValues(el: Element): string[] {
+  const declaredValues = agentMetaList(el, "data-agent-values");
+
+  const values: string[] = [];
+  for (const listbox of controlledListboxes(el)) {
+    listbox.querySelectorAll('[role="option"][aria-selected="true"]').forEach((opt) => {
+      const t = cleanText(opt.textContent ?? "");
+      if (t) values.push(t);
+    });
+  }
+  return unique([...declaredValues, ...values]);
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function describeOptions(options: string[]): string {
+  if (options.length === 0) return "";
+  return ` Available options: ${options.join(", ")}.`;
+}
+
+function describeSelection(values: string[], emptyFallback = "none"): string {
+  if (values.length === 0) return ` Current selection: ${emptyFallback}.`;
+  return ` Current selection: ${values.join(", ")}.`;
+}
+
+function isMultiSelectElement(el: Element): boolean {
+  if (agentMetaBool(el, "data-agent-multiselect")) return true;
+  if (el instanceof HTMLSelectElement) return el.multiple;
+  if (el.getAttribute("aria-multiselectable") === "true") return true;
+  if (el.getAttribute("multiple") !== null) return true;
+  return controlledListboxes(el).some(
+    (listbox) => listbox.getAttribute("aria-multiselectable") === "true",
+  );
+}
+
+function cleanText(text: string): string {
+  return text.replace(/[\u200B-\u200D\uFEFF]/g, "").replace(/\s+/g, " ").trim();
+}
+
+function labelFromText(el: Element): string {
+  const aria = cleanText(el.getAttribute("aria-label") || "");
+  const labelledBy = ariaLabelledByText(el);
+  const title = cleanText(el.getAttribute("title") || "");
+  const text = cleanText(el.textContent ?? "");
+  return aria || labelledBy || title || text;
+}
+
+function describeElement(
+  el: Element,
+): { label: string; description: string } {
+  const states = stateDetails(el);
+  const stateText = states.length ? ` State: ${states.join(", ")}.` : "";
+
+  const baseLabel = (): string => {
+    const txt = labelFromText(el);
+    if (txt) return txt;
+    if (el instanceof HTMLInputElement && el.placeholder?.trim()) {
+      return el.placeholder.trim();
+    }
+    if (el instanceof HTMLInputElement && el.name) return el.name;
+    if (el instanceof HTMLTextAreaElement && el.placeholder?.trim()) {
+      return el.placeholder.trim();
+    }
+    if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) {
+      const field = fieldNameFor(el);
+      if (field) return field;
+    }
+    return `${el.tagName.toLowerCase()} element`;
+  };
+
   if (el instanceof HTMLInputElement) {
-    const prefix = getInputPrefix(el);
-    let labelTxt = baseText;
-    if (!labelTxt && el.labels?.length) {
-      labelTxt = Array.from(el.labels)
+    const declaredName = agentMetaText(el, "data-agent-name");
+    const declaredCurrent = agentMetaText(el, "data-agent-value");
+    const labelTxt =
+      declaredName ||
+      fieldNameFor(el) ||
+      Array.from(el.labels ?? [])
         .map((l) => l.textContent?.trim())
         .filter(Boolean)
-        .join(" ");
-    }
-    let txt = labelTxt;
-    if (!txt && el.placeholder?.trim()) txt = el.placeholder.trim();
-    if (!txt && el.name) txt = el.name;
-    if (prefix) return `${prefix}: ${txt || el.type}${stateSuffix(el)}`;
-    // Dropdown rendered as an <input> (MUI Autocomplete, downshift, react-select):
-    // expose the FIELD NAME + current value so the LLM knows which filter this is.
+        .join(" ") ||
+      "";
+    const label = labelTxt || el.placeholder?.trim() || el.name || baseLabel();
+    const type = (el.type || "text").toLowerCase();
+
     const isComboInput =
       el.getAttribute("role") === "combobox" ||
       el.getAttribute("aria-haspopup") === "listbox" ||
       !!el.getAttribute("aria-autocomplete");
     if (isComboInput) {
-      const field = labelTxt || fieldNameFor(el);
-      const current = el.value?.trim() || el.placeholder?.trim() || "";
-      const currentSuffix =
-        current && current !== field ? ` (current: ${current})` : "";
-      return `FILTER DROPDOWN: ${field || txt || "select option"}${currentSuffix}${stateSuffix(el)}`;
+      const mode = isMultiSelectElement(el) ? "multi-select" : "single-select";
+      const current = declaredCurrent || el.value?.trim() || "";
+      const selectedFromListbox = selectedListboxValues(el);
+      const selection = unique([
+        ...(current ? [current] : []),
+        ...selectedFromListbox,
+      ]);
+      const options = comboboxOptions(el);
+      const optionsText =
+        options.length > 0
+          ? describeOptions(options)
+          : " Options are not currently exposed in DOM (often hidden until opened).";
+      const selectionText = describeSelection(selection);
+      const expandedText =
+        el.getAttribute("aria-expanded") === "true"
+          ? " Dropdown is currently expanded."
+          : " Dropdown is currently collapsed.";
+      return {
+        label,
+        description: `Filter dropdown (combobox). Selection mode: ${mode}.${selectionText}${optionsText}${expandedText}${stateText}`,
+      };
     }
-    // Masked date input (type="text" with date placeholder, e.g. MUI X DatePicker)
+
     const dateFormat = detectDateFormat(el);
-    if (dateFormat) {
-      const labelTxt = txt && txt !== dateFormat ? txt : "date";
-      return `DATE PICKER: ${labelTxt} (format: ${dateFormat})${stateSuffix(el)}`;
+    if (
+      dateFormat ||
+      ["date", "datetime-local", "time", "month", "week"].includes(type)
+    ) {
+      const formatText = dateFormat ? ` Format: ${dateFormat}.` : "";
+      return {
+        label,
+        description: `Date input.${formatText}${stateText}`,
+      };
     }
-    if (looksLikeSearch(`${txt} ${el.placeholder ?? ""} ${el.name ?? ""}`)) {
-      return `SEARCH BOX: ${txt || "search"}${stateSuffix(el)}`;
+
+    if (looksLikeSearch(`${label} ${el.placeholder ?? ""} ${el.name ?? ""}`)) {
+      return {
+        label,
+        description: `Search box for keyword filtering.${stateText}`,
+      };
     }
-    return `INPUT: ${txt || "text"}${stateSuffix(el)}`;
+
+    if (type === "checkbox" || type === "radio") {
+      return {
+        label,
+        description: `${type === "checkbox" ? "Checkbox" : "Radio option"}.${stateText}`,
+      };
+    }
+
+    if (type === "submit") {
+      return {
+        label,
+        description: `Submit button.${stateText}`,
+      };
+    }
+
+    if (type === "file") {
+      return {
+        label,
+        description: `File upload input.${stateText}`,
+      };
+    }
+
+    return {
+      label,
+      description: `Text input field.${stateText}`,
+    };
   }
 
   if (el instanceof HTMLTextAreaElement) {
-    let txt = baseText;
-    if (!txt && el.labels?.length) {
-      txt = Array.from(el.labels)
-        .map((l) => l.textContent?.trim())
-        .filter(Boolean)
-        .join(" ");
-    }
-    if (!txt && el.placeholder?.trim()) txt = el.placeholder.trim();
-    return `TEXTAREA: ${txt || "multi-line text"}${stateSuffix(el)}`;
+    const label =
+      fieldNameFor(el) || el.placeholder?.trim() || labelFromText(el) || "notes";
+    return {
+      label,
+      description: `Multi-line text input.${stateText}`,
+    };
   }
 
   if (el instanceof HTMLSelectElement) {
-    const sel = el.selectedOptions[0]?.textContent?.trim() ?? "(none)";
+    const declaredName = agentMetaText(el, "data-agent-name");
+    const declaredCurrent = agentMetaText(el, "data-agent-value");
+    const declaredValues = agentMetaList(el, "data-agent-values");
+    const label = declaredName || fieldNameFor(el) || labelFromText(el) || "select option";
+    const mode = el.multiple ? "multi-select" : "single-select";
+    const currentValues = Array.from(el.selectedOptions)
+      .map((o) => cleanText(o.textContent ?? ""))
+      .filter(Boolean);
+    if (declaredCurrent) currentValues.push(declaredCurrent);
+    currentValues.push(...declaredValues);
     const opts = Array.from(el.options)
       .map((o) => o.textContent?.replace(/\s+/g, " ").trim())
       .filter((t): t is string => !!t);
-    const optsSuffix = opts.length ? ` [options: ${opts.join(", ")}]` : "";
-    // Derive the FIELD NAME without dumping every option into it. `fieldNameFor`
-    // cleans wrapping <label> text (strips child select/option text); a raw
-    // `el.labels` join would otherwise pull in the whole option list, duplicating
-    // `[options: ...]` and wasting prompt tokens.
-    let field = baseText;
-    if (!field) field = fieldNameFor(el);
-    if (!field && el.labels?.length) {
-      field = Array.from(el.labels)
-        .map((l) => {
-          const clone = l.cloneNode(true) as HTMLElement;
-          clone
-            .querySelectorAll("select, option, input, textarea")
-            .forEach((c) => c.remove());
-          return clone.textContent?.replace(/\s+/g, " ").trim();
-        })
-        .filter(Boolean)
-        .join(" ");
-    }
-    const head = field && field !== sel ? `${field} (current: ${sel})` : sel;
-    return `FILTER DROPDOWN: ${head}${optsSuffix}${stateSuffix(el)}`;
+    const declaredOptions = agentMetaList(el, "data-agent-options");
+    const optionsText = describeOptions(unique([...declaredOptions, ...opts]));
+    const selectionText = describeSelection(unique(currentValues));
+    return {
+      label,
+      description: `Filter dropdown (native select). Selection mode: ${mode}.${selectionText}${optionsText}${stateText}`,
+    };
   }
 
   if (el instanceof HTMLButtonElement && el.type === "submit") {
-    const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `SUBMIT BUTTON: ${baseText || text || "submit"}${stateSuffix(el)}`;
+    return {
+      label: labelFromText(el) || "Submit",
+      description: `Submit button.${stateText}`,
+    };
   }
 
   const role = el.getAttribute("role");
+  const textLabel = labelFromText(el) || baseLabel();
 
   if (role === "tab") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    const selected =
-      el.getAttribute("aria-selected") === "true" ? " (active)" : "";
-    return `TAB: ${text || "tab"}${selected}${stateSuffix(el)}`;
+    return {
+      label: textLabel,
+      description: `Tab that switches page content.${stateText}`,
+    };
   }
 
   if (role === "combobox") {
-    const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    const field = baseText || fieldNameFor(el);
-    const currentSuffix =
-      field && text && !field.includes(text) ? ` (current: ${text})` : "";
-    return `FILTER DROPDOWN: ${field || text || "select option"}${currentSuffix}${stateSuffix(el)}`;
+    const declaredName = agentMetaText(el, "data-agent-name");
+    const declaredCurrent = agentMetaText(el, "data-agent-value");
+    const field = declaredName || fieldNameFor(el) || textLabel || "select option";
+    const mode = isMultiSelectElement(el) ? "multi-select" : "single-select";
+    const current = declaredCurrent || cleanText(el.textContent ?? "");
+    const selectedFromListbox = selectedListboxValues(el);
+    const selection = unique([
+      ...(current ? [current] : []),
+      ...selectedFromListbox,
+    ]);
+    const options = comboboxOptions(el);
+    const optionsText =
+      options.length > 0
+        ? describeOptions(options)
+        : " Options are not currently exposed in DOM (often hidden until opened).";
+    const selectionText = describeSelection(selection);
+    const expandedText =
+      el.getAttribute("aria-expanded") === "true"
+        ? " Dropdown is currently expanded."
+        : " Dropdown is currently collapsed.";
+    return {
+      label: field,
+      description: `Filter dropdown (combobox). Selection mode: ${mode}.${selectionText}${optionsText}${expandedText}${stateText}`,
+    };
   }
 
   if (role === "searchbox") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `SEARCH BOX: ${text || "search"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "Search",
+      description: `Search box for keyword filtering.${stateText}`,
+    };
   }
 
   if (
@@ -337,44 +507,59 @@ function getLabel(el: Element): string {
     role === "menuitemcheckbox" ||
     role === "menuitemradio"
   ) {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `MENU ITEM: ${text || "menu option"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "menu option",
+      description: `Menu action item.${stateText}`,
+    };
   }
 
   if (role === "option") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `DROPDOWN OPTION: ${text || "option"}${stateSuffix(el)}`;
+    const selected = el.getAttribute("aria-selected") === "true";
+    return {
+      label: textLabel || "option",
+      description: `Selectable dropdown option.${selected ? " Currently selected." : ""}${stateText}`,
+    };
   }
 
   if (role === "switch") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `TOGGLE: ${text || "switch"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "switch",
+      description: `Toggle control.${stateText}`,
+    };
   }
 
   if (role === "checkbox") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `CHECKBOX: ${text || "checkbox"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "checkbox",
+      description: `Checkbox control.${stateText}`,
+    };
   }
 
   if (role === "radio") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
-    return `RADIO: ${text || "radio"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "radio",
+      description: `Radio control.${stateText}`,
+    };
   }
 
   if (role === "slider" || role === "spinbutton") {
-    const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
     const value = el.getAttribute("aria-valuenow") ?? "";
-    return `${role.toUpperCase()}: ${text || role}${value ? ` = ${value}` : ""}${stateSuffix(el)}`;
+    return {
+      label: textLabel || role,
+      description: `${role === "slider" ? "Slider" : "Number spinner"}.${
+        value ? ` Current value: ${value}.` : ""
+      }${stateText}`,
+    };
   }
 
   if ((el as HTMLElement).isContentEditable) {
-    const text =
-      baseText ||
-      (el.textContent ?? "").replace(/\s+/g, " ").trim().substring(0, 40);
-    return `EDITABLE: ${text || "rich text"}${stateSuffix(el)}`;
+    return {
+      label: textLabel || "rich text",
+      description: `Rich text editable area.${stateText}`,
+    };
   }
 
-  const text = baseText || (el.textContent ?? "").replace(/\s+/g, " ").trim();
+  const text = textLabel;
 
   // Wrapper buttons / labels that contain a single checkbox/radio (common Switch pattern
   // across MUI, Chakra, Radix, Headless UI, etc.): surface the input's state so the LLM
@@ -385,8 +570,10 @@ function getLabel(el: Element): string {
     ) as HTMLInputElement | null;
     if (innerToggle && text) {
       const stateWord = innerToggle.checked ? "checked" : "unchecked";
-      const prefix = innerToggle.type === "radio" ? "RADIO" : "TOGGLE";
-      return `${prefix}: ${text} (${stateWord})`;
+      return {
+        label: text,
+        description: `${innerToggle.type === "radio" ? "Radio" : "Toggle"} control. Current value: ${stateWord}.${stateText}`,
+      };
     }
   }
 
@@ -422,14 +609,44 @@ function getLabel(el: Element): string {
       }
       ancestor = ancestor.parentElement;
     }
-    if (cardTitle)
-      return `Per-item actions menu (${cardTitle.substring(0, 30)})${stateSuffix(el)}`;
-    return `Per-item actions menu (\u22EF)${stateSuffix(el)}`;
+    const scope = cardTitle ? ` (${cardTitle.substring(0, 30)})` : "";
+    return {
+      label: "Per-item actions menu",
+      description: `Opens a menu with actions for a single item${scope}.${stateText}`,
+    };
   }
 
-  if (text) return `${text}${stateSuffix(el)}`;
+  if (text) {
+    // Utility/toolbar buttons (Refresh, Reload, devtools) frequently share words
+    // with the data the user names (e.g. "Refresh Applications List" vs "sent
+    // applications"), which tempts a small model to click them instead of using
+    // the filter. Flag them so they stop competing with real filter controls.
+    const isButtonish =
+      el.tagName === "BUTTON" ||
+      el.getAttribute("role") === "button" ||
+      el.tagName === "A";
+    if (
+      isButtonish &&
+      /\b(refresh|reload|re-?fetch|devtools)\b|تحديث|إعادة تحميل/i.test(text)
+    ) {
+      return {
+        label: text,
+        description: `Utility action.${stateText}`,
+      };
+    }
+    const linkLike = el.tagName.toLowerCase() === "a" || role === "link";
+    const buttonLike =
+      el.tagName.toLowerCase() === "button" || role === "button";
+    return {
+      label: text,
+      description: `${buttonLike ? "Button action" : linkLike ? "Link action" : "Interactive element"}.${stateText}`,
+    };
+  }
 
-  return `${el.tagName.toLowerCase()} element${stateSuffix(el)}`;
+  return {
+    label: `${el.tagName.toLowerCase()} element`,
+    description: `Interactive element.${stateText}`,
+  };
 }
 
 function getType(el: Element): string | null {
@@ -538,8 +755,7 @@ export function scanInteractiveElements(
     const index = i + 1;
     elementMap.set(index, el);
 
-    const rawLabel = getLabel(el);
-    const label = openModal ? `[MODAL] ${rawLabel}` : rawLabel;
+    const { label, description } = describeElement(el);
 
     return {
       index,
@@ -547,6 +763,8 @@ export function scanInteractiveElements(
       role: el.getAttribute("role"),
       type: getType(el),
       label,
+      description,
+      kind: "interactive" as const,
     };
   });
 
@@ -572,22 +790,12 @@ export function scanInteractiveElements(
       return null;
     };
 
-    // 1) Explicit opt-in: any element with data-agent-section="<name>"
-    root.querySelectorAll("[data-agent-section]").forEach((el) => {
-      if (el.closest("[data-agent-panel]")) return;
-      if (!isVisible(el, win)) return;
-      const name = (el.getAttribute("data-agent-section") || "").trim();
-      if (!name || sectionSet.has(el)) return;
-      sectionSet.add(el);
-      sections.push({ el, name });
-    });
-
     const mainRootEarly =
       (root as Element).querySelector?.('main, [role="main"]') ??
       root.querySelector('main, [role="main"]') ??
       root;
 
-    // 1b) Declared sections by TITLE TEXT: section titles are often plain text
+    // 1) Declared sections by TITLE TEXT: section titles are often plain text
     //     (span / p / Typography), not <h*> headings, so the heading heuristic below
     //     would miss them. Because the developer explicitly declared these names in the
     //     agent config, trust them: find the title element whose OWN text matches a
@@ -734,35 +942,13 @@ export function scanInteractiveElements(
         tag: el.tagName.toLowerCase(),
         role: el.getAttribute("role"),
         type: null,
-        label: `SECTION: ${name}`,
+        label: name,
+        description: "Page section landmark. Use scroll with this index to focus it.",
+        kind: "section" as const,
       });
     });
   }
-
-  const headerLines: string[] = [];
-  if (openModal) {
-    const modalTitle =
-      openModal
-        .querySelector('h1,h2,h3,h4,h5,h6,[role="heading"]')
-        ?.textContent?.trim() ||
-      openModal.getAttribute("aria-label") ||
-      "Unnamed dialog";
-    headerLines.push(
-      `MODAL OPEN: "${modalTitle}" — only its elements are listed below.`,
-    );
-  }
-
-  const elementsText = elements
-    .map((el) => {
-      const rolePart = el.role ? `[role=${el.role}]` : "";
-      const typePart = el.type ? `:${el.type}` : "";
-      return `[${el.index}] ${el.tag}${rolePart}${typePart} "${el.label}"`;
-    })
-    .join("\n");
-
-  const text = headerLines.length
-    ? `${headerLines.join("\n")}\n${elementsText}`
-    : elementsText;
+  const text = JSON.stringify(elements, null, 2);
 
   console.debug("Scanned interactive elements:", {
     elements,

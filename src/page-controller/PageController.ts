@@ -11,6 +11,7 @@ export class PageController {
   private elementMap = new Map<number, Element>();
   private readonly targetFrame?: HTMLIFrameElement;
   private readonly declaredSections: string[];
+  private fallbackUrl = "";
 
   constructor(
     targetFrame?: HTMLIFrameElement,
@@ -27,22 +28,47 @@ export class PageController {
     return { doc, win };
   }
 
+  /** Safely read the current URL, returning "" on cross-origin errors. */
+  private readUrl(): string {
+    try {
+      return this.getDocWin().win.location.href;
+    } catch {
+      // Cross-origin iframe — location is inaccessible.
+      return "";
+    }
+  }
+
   observe(): PageObservation {
     const { doc, win } = this.getDocWin();
     const scan = scanInteractiveElements(doc, win, this.declaredSections);
     this.elementMap = scan.elementMap;
-    console.log("PageController.observe scan result", scan);
+    const url = this.readUrl();
+    // Keep fallbackUrl in sync with the real URL when readable.
+    if (url) this.fallbackUrl = url;
     return {
-      url: win.location.href,
+      url: url || this.fallbackUrl,
       title: doc.title,
       elements: scan.elements,
       elementsText: scan.text,
     };
   }
 
-  /** Cheap URL read without re-scanning the DOM. */
+  /** Cheap URL read without re-scanning the DOM. Cross-origin safe. */
   getUrl(): string {
-    return this.getDocWin().win.location.href;
+    return this.readUrl() || this.fallbackUrl;
+  }
+
+  /**
+   * Always returns a URL string: the real iframe URL when readable,
+   * otherwise the fallback provided by the host via setFallbackUrl().
+   */
+  getEffectiveUrl(): string {
+    return this.readUrl() || this.fallbackUrl;
+  }
+
+  /** Store a fallback URL for when the iframe is cross-origin. */
+  setFallbackUrl(url: string): void {
+    this.fallbackUrl = url;
   }
 
   /**

@@ -22,6 +22,8 @@ export class MyPageAgent {
           this.stepListeners.forEach((listener) => listener(line))
           this.config.callbacks?.onStep?.(entry)
         },
+        // Forward onPageReady directly so the two-phase flow can signal the host.
+        onPageReady: config.callbacks?.onPageReady,
       },
     })
   }

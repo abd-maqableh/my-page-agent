@@ -438,11 +438,13 @@ describe('agent scenarios', () => {
     expect(client.calls).toBe(1)
   })
 
-  it('resolves a pure navigation request with ZERO model calls', async () => {
+  it('handles a pure navigation request through one model call', async () => {
     window.history.pushState({}, '', '/applications')
     document.body.innerHTML = '<main><h1>Applications</h1></main>'
 
-    const client = new CountingScriptedLLMClient([])
+    const client = new CountingScriptedLLMClient([
+      { thought: 'already on target page', action: 'done', args: { result: 'Already on applications.' } },
+    ])
     const agent = new MyPageAgent({
       baseURL: 'http://localhost:11434/v1',
       apiKey: 'NA',
@@ -454,8 +456,7 @@ describe('agent scenarios', () => {
     const result = await agent.execute('go to applications')
 
     expect(result.status).toBe('done')
-    // The deterministic router handled it — the model was never consulted.
-    expect(client.calls).toBe(0)
+    expect(client.calls).toBe(1)
     expect(result.message.toLowerCase()).toContain('applications')
   })
 
@@ -570,5 +571,66 @@ describe('agent scenarios', () => {
     // Unknown page → no deterministic navigation, exactly one model call.
     expect(client.calls).toBe(1)
     expect(result.message.toLowerCase()).toContain('billing')
+  })
+
+  it('select redirects to the dropdown that offers the value when the model targets a wrong element', async () => {
+    HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect(): DOMRect {
+      return {
+        x: 0,
+        y: 0,
+        top: 0,
+        left: 0,
+        right: 240,
+        bottom: 48,
+        width: 240,
+        height: 48,
+        toJSON() {
+          return this
+        },
+      } as DOMRect
+    }
+
+    // The model correctly chose `select value:"Sent"` but attached it to the wrong
+    // index (the Refresh button) instead of the status dropdown. The select action
+    // must faithfully execute the requested VALUE by redirecting to the dropdown
+    // whose own options include "Sent" — without the model deciding for it.
+    document.body.innerHTML = `
+      <main>
+        <button type="button">Refresh Applications List</button>
+        <label>
+          Status
+          <select>
+            <option>All Statuses</option>
+            <option>Sent</option>
+            <option>On Hold</option>
+            <option>Rejected</option>
+          </select>
+        </label>
+      </main>
+    `
+
+    const client = new CountingScriptedLLMClient([
+      [
+        // index 1 is the Refresh button, NOT the dropdown — the reported mistake.
+        { thought: 'filter to sent', action: 'select', args: { index: 1, value: 'Sent' } },
+        { action: 'done', args: { result: 'Filtered by Sent.' } },
+      ],
+    ])
+
+    const agent = new MyPageAgent({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'test-model',
+      llmClient: client,
+      maxSteps: 4,
+    })
+
+    const result = await agent.execute('show me sent applications')
+    const select = document.querySelector('select') as HTMLSelectElement
+
+    expect(result.status).toBe('done')
+    // Faithful execution of the model's chosen value — Sent is applied.
+    expect(select.value).toBe('Sent')
+    expect(client.calls).toBe(1)
   })
 })
