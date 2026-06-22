@@ -516,7 +516,7 @@ describe('agent scenarios', () => {
 
     expect(result.status).toBe('done')
     expect(selects[1].value).toBe('Rejected')
-    expect(result.message).toContain('Selected')
+    expect(result.message).toContain('apply the status')
     expect(client.calls).toBe(1)
   })
 

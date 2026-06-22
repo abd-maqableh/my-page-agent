@@ -197,8 +197,12 @@ export class OpenAIClient implements LLMClient {
     // Truncation guard: when the model hit the token cap the JSON is cut off and
     // would throw a confusing parse error. Surface an actionable message instead.
     if (choice?.finish_reason === 'length') {
+      const modelName = this.config.model;
+      const tokenLimit = this.config.maxTokens ?? 'unlimited';
       throw new Error(
-        'Model output was truncated (hit the token limit). Increase max_tokens (VITE_AGENT_MAX_TOKENS) and try again.',
+        `LLM response was truncated (finish_reason: length). ` +
+        `Model: "${modelName}", current maxTokens: ${tokenLimit}. ` +
+        `Increase maxTokens (VITE_AGENT_MAX_TOKENS) to resolve.`,
       )
     }
 

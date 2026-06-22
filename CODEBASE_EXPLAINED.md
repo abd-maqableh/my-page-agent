@@ -15,6 +15,7 @@
 6. [`src/core/Agent.ts` — The Agent Loop](#6-srccoreagenttts--the-agent-loop)
 7. [`src/llm/createLLMClient.ts` — LLM Factory](#7-srclllmcreatelllmclientts--llm-factory)
 8. [`src/llm/OpenAIClient.ts` — Universal LLM Client](#8-srcllmopenaicllientts--universal-llm-client)
+9. [`src/core/text.ts` — Text Normalization Helpers](#9-srccoretextts--text-normalization-helpers)
 10. [`src/page-controller/domScanner.ts` — DOM Inspector](#10-srcpage-controllerdomscannercts--dom-inspector)
 11. [`src/page-controller/actions.ts` — DOM Actions](#11-srcpage-controlleractionscts--dom-actions)
 12. [`src/page-controller/PageController.ts` — Page Facade](#12-srcpage-controllerpage-controllerts--page-facade)
@@ -148,15 +149,24 @@ export interface PageElementSummary {
   role?: string | null
   type?: string | null
   label: string
+  description?: string
+  /**
+   * Whether this entry is an actionable control or a scroll-only page landmark.
+   * Used to group the serialized observation into clearly separated blocks so the
+   * model never clicks a SECTION when it should select/filter.
+   */
+  kind?: 'interactive' | 'section'
 }
 ```
 
-- **What:** A compact description of one interactive element on the page, as seen by the agent.
+- **What:** A structured description of one element on the page, as seen by the agent.
 - **`index`** – A stable 1-based number assigned to this element. The LLM refers to elements *only* by their index.
 - **`tag`** – The HTML tag name (`button`, `input`, `a`, etc.).
 - **`role`** – The ARIA role (`button`, `tab`, `combobox`, etc.) if the element has one.
 - **`type`** – The `type` attribute of `<input>` elements (`text`, `email`, `checkbox`, etc.).
-- **`label`** – A human-readable description built by `domScanner.ts` (e.g. `"SUBMIT BUTTON: Save"`).
+- **`label`** – A human-readable name (e.g. `"Submit"`, `"Request Status"`).
+- **`description`** – A rich prose description built by `describeElement()` in `domScanner.ts`. Includes state (disabled/required/checked), input type, available options for dropdowns, selection mode (single/multi), and semantic hints like "Search box for keyword filtering" or "Filter dropdown (combobox)".
+- **`kind`** – Either `'interactive'` (buttons, inputs, dropdowns) or `'section'` (chart cards, widget panels). The LLM's system prompt uses this to prevent the model from trying to click a section landmark.
 
 ---
 
@@ -172,8 +182,8 @@ export interface PageObservation {
 - **What:** Everything the agent knows about the current page at a given moment.
 - **`url`** – The current page URL (used to detect navigation).
 - **`title`** – The `<title>` of the document.
-- **`elements`** – The full structured list of interactive elements.
-- **`elementsText`** – A pre-formatted plain-text version of `elements` that goes directly into the LLM prompt.
+- **`elements`** – The full structured list of interactive elements and section landmarks.
+- **`elementsText`** – A **JSON-serialized** version of `elements` that goes directly into the LLM prompt. Now serialized as structured JSON (not plain text lines) so the LLM can parse `description` fields with dropdown options, states, etc.
 
 ---
 
@@ -210,13 +220,40 @@ export interface AgentHistoryEntry {
 export interface AgentCallbacks {
   onStatus?: (status: string) => void
   onStep?: (entry: AgentHistoryEntry) => void
+  /**
+   * Two-phase flow only. Called after Phase 1 navigation so the host can
+   * show the iframe and wait for it to load, then resolve the promise to
+   * signal Phase 2 can start scanning the new DOM.
+   */
+  onPageReady?: () => Promise<void>
 }
 ```
 
 - **What:** Optional event hooks the consumer can attach to observe the agent's progress.
 - **`onStatus`** – Fired with a short status string each time the agent moves to a new phase (e.g. `"Step 2: asking model"`).
 - **`onStep`** – Fired at the end of each step with the full history entry.
+- **`onPageReady`** – Two-phase flow only. After Phase 1 navigates to a new page, the agent calls this. The host shows the iframe, waits for it to finish loading, then resolves the promise. This signals Phase 2 can start scanning the DOM.
 - **Why:** Decouples the agent from the UI — the Panel listens to these callbacks to update the display.
+
+---
+
+```ts
+export interface ActionQueueItemResult {
+  action: AgentAction
+  result: ActionExecutionResult
+}
+
+export interface ActionQueueResult {
+  items: ActionQueueItemResult[]
+  /** True only when an explicit `done` action (or result.done) ended the queue. */
+  done: boolean
+  /** Set when an action failed; carries the failure message. */
+  error?: string
+}
+```
+
+- **`ActionQueueItemResult`** – Pairs an action with its execution result. One entry per action in a batch.
+- **`ActionQueueResult`** – The result of executing a batch of actions. `items` contains the ordered results. `done` is `true` when an explicit `done` action ended the batch. `error` is set when any action in the batch failed.
 
 ---
 
@@ -237,11 +274,17 @@ export interface AgentRunResult {
 
 ```ts
 export interface LLMClient {
-  getNextAction(messages: ChatMessage[]): Promise<AgentAction>
+  /**
+   * Ask the model for the next action(s). Returning more than one action lets the
+   * agent run a whole batch (e.g. apply several filters, then `done`) from a SINGLE
+   * API round-trip instead of one call per action.
+   */
+  getNextActions(messages: ChatMessage[]): Promise<AgentAction[]>
 }
 ```
 
 - **`LLMClient`** – An interface (a contract) that `OpenAIClient` must satisfy. The `Agent` only depends on this interface, making it easy to add new providers without touching the agent code.
+- **`getNextActions`** – Returns an **array** of `AgentAction` (not a single action). This supports **batching**: the LLM can return `[{select: "Active"}, {select: "Mining"}, {done: "Filters applied"}]` in one API call, dramatically reducing latency compared to one API round-trip per action.
 
 ---
 
@@ -251,6 +294,12 @@ export interface LLMConfig {
   apiKey: string
   model: string
   temperature?: number
+  /** Cap on generated tokens per call. Low cap (256–800) prevents slow, runaway generation. */
+  maxTokens?: number
+  /** When true, request response_format: { type: 'json_object' } for structured output. */
+  jsonMode?: boolean
+  /** Abort a single request after this many ms via AbortController. */
+  requestTimeoutMs?: number
   allowDirectProvider?: boolean
 }
 ```
@@ -264,14 +313,23 @@ export interface LLMConfig {
 - **`apiKey`** – The bearer token. Use `'NA'` for local models with no authentication.
 - **`model`** – Model identifier (e.g. `"gpt-4o"`, `"llama3.2"`, `"qwen3:14b"`).
 - **`temperature`** – Randomness of responses (0 = deterministic).
+- **`maxTokens`** – Caps `max_tokens` in the API request. The agent only needs small JSON actions; a low cap prevents runaway generation on verbose models.
+- **`jsonMode`** – Requests `response_format: { type: 'json_object' }` so compatible servers (vLLM, SGLang, OpenAI) return ONLY valid JSON — this also suppresses long prose/think-traces.
+- **`requestTimeoutMs`** – Aborts stuck inferences via `AbortController` so they fail fast instead of hanging.
 - **`allowDirectProvider`** – Security opt-in; see `OpenAIClient.ts` for details.
 
 ---
 
 ```ts
 export interface AgentConfigBase {
+  /** Optional injected client for deterministic tests or custom runtimes. */
+  llmClient?: LLMClient
   maxSteps?: number
   callbacks?: AgentCallbacks
+  /** When true, uses two-phase flow: Phase 1 (navigate) → Phase 2 (interact). */
+  twoPhase?: boolean
+  /** The iframe's initial URL, provided by the host. Updated after each navigation. */
+  currentUrl?: string
   confirmAction?: (action: AgentAction) => boolean | Promise<boolean>
   targetFrame?: HTMLIFrameElement
   pages?: Record<string, string | PageDescriptor>
@@ -424,22 +482,50 @@ export function normalizeAction(input: unknown): AgentAction {
 
 ---
 
-## 5. `src/core/prompt.ts` — LLM Prompt Builder
-
-This file is responsible for constructing the exact messages sent to the LLM. The quality and precision of these messages directly determines how well the agent performs.
-
 ```ts
-import type { AgentHistoryEntry, ChatMessage, PageObservation } from './types'
-
-const MAX_HISTORY_ENTRIES = 8
+export function normalizeActions(input: unknown): AgentAction[] {
+  if (Array.isArray(input)) {
+    return input.map((item) => normalizeAction(item))
+  }
+  if (input && typeof input === 'object' && Array.isArray((input as Record<string, unknown>).actions)) {
+    const obj = input as Record<string, unknown>
+    const sharedThought = typeof obj.thought === 'string' ? obj.thought : undefined
+    return (obj.actions as unknown[]).map((item) => {
+      // Propagate top-level thought to batched actions that lack their own
+      if (sharedThought && item && typeof item === 'object' &&
+          !('thought' in (item as Record<string, unknown>))) {
+        return normalizeAction({ thought: sharedThought, ...(item as Record<string, unknown>) })
+      }
+      return normalizeAction(item)
+    })
+  }
+  return [normalizeAction(input)]
+}
 ```
 
-- `MAX_HISTORY_ENTRIES` – Limits how much history we include in the prompt. LLMs have a limited context window; including too many steps wastes tokens and can confuse the model. 8 is enough to avoid repetition while staying lean.
+- **What:** Normalizes a model response into a LIST of actions. Supports THREE shapes:
+  1. A single action object: `{"action":"select","args":{...}}` → `[action]`
+  2. An object with an `actions` array: `{"thought":"...","actions":[{...},{...}]}` → `[action, action]`
+  3. A bare array: `[{...},{...}]` → `[action, action]`
+- **`sharedThought`** – If the wrapper object has a top-level `thought`, it's propagated to any batched action that lacks its own `thought`.
+- **Why:** The LLM can now return batches of actions in one response. `normalizeActions` handles all the shapes a model might emit, wrapping everything into a consistent `AgentAction[]`.
 
 ---
 
+## 5. `src/core/prompt.ts` — LLM Prompt Builder
+
+This file is responsible for constructing the exact messages sent to the LLM. The prompt system is now **split into two functions** to support the two-phase execution flow.
+
+- **`buildNavigationPrompt(task, pages, currentUrl?)`** — Phase 1 only. Minimal prompt with NO DOM elements. The LLM only decides which page to `navigate` to. Lists all known pages with their paths and declared sections.
+- **`buildInteractionPrompt(task, observation, pages?, completedSteps?)`** — Phase 2 (and single-phase). Full DOM scan with filter map, completed steps, and all interaction rules. This is the main prompt for all DOM interactions.
+- **`buildFilterMap(elements)`** — Helper that builds a "value → dropdown index" lookup table from scanned combobox elements, so the LLM doesn't need to parse JSON to find which dropdown has which option.
+- **`formatPagePaths(pages, indent?)`** — Recursively flattens the `pages` map into aligned `label → url` lines with inline section hints.
+- **`buildPrompt`** — **Deprecated** alias for `buildInteractionPrompt`, kept for backward compatibility.
+
+The original single-prompt design (`buildPrompt`) is still available but the split design means Phase 1 never wastes tokens on DOM elements the LLM can't yet see, and Phase 2 benefits from a focused interaction-only system message.
+
 ```ts
-function formatHistory(history: AgentHistoryEntry[]): string {
+import type { AgentHistoryEntry, ChatMessage, PageDescriptor, PageObservation } from './types'
   if (!history.length) {
     return 'No prior actions.'
   }
@@ -574,22 +660,36 @@ export function buildPrompt(
 
 ## 6. `src/core/Agent.ts` — The Agent Loop
 
-This is the **brain** of the project. It orchestrates the observe → think → act cycle.
+This is the **brain** of the project. It orchestrates the observe → think → act cycle. Now supports **two execution modes**:
+
+- **Two-phase** (`twoPhase: true`): Phase 1 decides which page to navigate to (no DOM needed), Phase 2 interacts with the loaded page DOM.
+- **Single-phase** (default): Direct interaction with the current page, using batch actions for efficiency.
+
+Both modes use **batch actions** — the LLM returns an `AgentAction[]` array, allowing multiple actions per API round-trip (e.g. apply several filters then `done`).
 
 ```ts
 import { createLLMClient } from '../llm/createLLMClient'
 import { PageController } from '../page-controller/PageController'
-import { buildPrompt } from './prompt'
+import { buildNavigationPrompt, buildInteractionPrompt } from './prompt'
 import type { AgentConfig, AgentHistoryEntry, AgentRunResult, LLMClient } from './types'
 ```
 
-- **Why each import:** The agent needs an LLM client (to get actions), a PageController (to observe and act on the page), and the prompt builder (to format inputs for the LLM).
+- **Why each import:** The agent needs an LLM client (to get batches of actions), a PageController (to observe and act on the page), and BOTH prompt builders — `buildNavigationPrompt` for Phase 1 navigation and `buildInteractionPrompt` for Phase 2 interaction.
 
 ---
 
 ```ts
 export class Agent {
-  private readonly maxSteps: number
+  private readonly client: LLMClient
+  private readonly pageController: PageController
+  private readonly callbacks?: AgentConfig['callbacks']
+  private readonly confirmAction?: AgentConfig['confirmAction']
+  private readonly pages?: AgentConfig['pages']
+  private readonly twoPhase: boolean
+```
+
+- **`client: LLMClient`** – Typed as the *interface*, not a concrete class. This is **dependency inversion**. Can also be injected via `config.llmClient` for tests.
+- **`twoPhase`** – When `true` AND `pages` is provided AND `callbacks.onPageReady` exists, the agent uses the two-phase flow.
   private readonly client: LLMClient
   private readonly pageController: PageController
   private readonly callbacks?: AgentConfig['callbacks']
@@ -861,7 +961,7 @@ export function createLLMClient(config: LLMConfig): LLMClient {
 
 ## 8. `src/llm/OpenAIClient.ts` — Universal LLM Client
 
-This file handles communication with **any** OpenAI-compatible REST API.
+This file handles communication with **any** OpenAI-compatible REST API. The main method is now `getNextActions` (returns `AgentAction[]` for batching), and the config supports `maxTokens`, `jsonMode`, and `requestTimeoutMs`.
 
 ```ts
 interface ChatCompletionsResponse {
@@ -869,37 +969,77 @@ interface ChatCompletionsResponse {
     message?: {
       content?: string | null
     }
+    finish_reason?: string | null
   }>
-  error?: {
-    message?: string
-  }
+  // OpenAI returns { error: { message } }; native Ollama errors can be { error: "string" }.
+  error?: { message?: string } | string
 }
 ```
 
-- **What:** A TypeScript interface for the shape of the API response. All fields are optional (`?`) because the API might return errors instead of choices.
-- **Why:** Without this, we'd have to use `any` — which would lose all type safety.
+- **What:** A TypeScript interface for the shape of the API response.
+- **`finish_reason`** – Added to detect `'length'` (truncation) and surface an actionable error instead of a confusing JSON parse failure.
+- **`error`** – Can be either an OpenAI-style object `{ message: "..." }` or a bare string (Ollama). The `readErrorMessage` helper handles both.
 
 ---
 
 ```ts
 function extractJSON(text: string): string {
-  const trimmed = text.trim()
-
-  const block = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i)
-  const candidate = block?.[1]?.trim() ?? trimmed
+  // ... finds the FIRST JSON value — either { } or [ ] — and returns it
+  // via balanced-bracket extraction. Supporting arrays lets the model emit
+  // a batch of actions (e.g. [{select},{select},{done}]) in one response.
 ```
 
-- **What:** Extracts a JSON object from a string that may contain markdown code fences or extra text.
-- **`/```(?:json)?\s*([\s\S]*?)\s*```/i`** – Matches ` ```json ... ``` ` or ` ``` ... ``` ` blocks. `(?:json)?` means the `json` part is optional. `[\s\S]*?` matches any character including newlines, non-greedily.
-- **`block?.[1]?.trim()`** – The first capture group is the content inside the fences. If there are no fences, fall back to the trimmed original text.
+- **What:** Now supports extracting both `{...}` objects AND `[...]` arrays. Walks the string maintaining brace/bracket-depth to find the first complete JSON value.
+- **Why:** The model can now return a bare array like `[{"action":"select","args":...},{"action":"done",...}]` directly, which our `normalizeActions` handles.
 
 ---
 
 ```ts
-  const start = candidate.indexOf('{')
-  if (start !== -1) {
-    let depth = 0
-    let inString = false
+export function parseAgentActions(raw: string): AgentAction[] {
+  let payload: unknown
+  try {
+    payload = JSON.parse(extractJSON(raw))
+  } catch (error) {
+    throw new Error(`Failed to parse LLM JSON response: ...`)
+  }
+  const actions = normalizeActions(payload)
+  if (actions.length === 0) {
+    throw new Error('LLM response contained no valid action.')
+  }
+  return actions
+}
+```
+
+- **What:** Replaces `parseAgentActionResponse`. Parses the LLM response into **one or more** actions (supports batched arrays).
+- **`normalizeActions(payload)`** – Handles single action objects, `{actions:[...]}` wrappers, and bare arrays.
+
+---
+
+```ts
+export function parseAgentActionResponse(raw: string): AgentAction {
+  return parseAgentActions(raw)[0]
+}
+```
+
+- **What:** Backward-compatible wrapper. Returns only the **first** action from `parseAgentActions`.
+
+---
+
+```ts
+export class OpenAIClient implements LLMClient {
+  async getNextActions(messages: ChatMessage[]): Promise<AgentAction[]> {
+    // ... POSTs to /chat/completions with:
+    //   - model, temperature, messages
+    //   - max_tokens (if config.maxTokens is set)
+    //   - response_format: { type: 'json_object' } (if config.jsonMode is true)
+    //   - AbortController timeout (if config.requestTimeoutMs is set)
+    //
+    // Logs request/response timing to console with color-coded groups.
+    // Checks finish_reason === 'length' for truncation errors.
+    // Returns parseAgentActions(content).
+  }
+}
+```
     let escaped = false
     for (let i = start; i < candidate.length; i++) {
       const ch = candidate[i]
@@ -1044,6 +1184,128 @@ export class OpenAIClient implements LLMClient {
 - **`response.ok`** – `true` if the HTTP status code is 200–299.
 - **`data.error?.message`** – The OpenAI error format includes an `error.message` field. If it's present, use it; otherwise fall back to the HTTP status code.
 - **`data.choices?.[0]?.message?.content`** – Deep optional chaining through the response structure. If any level is `undefined` (empty response, unexpected shape), `content` is `undefined`.
+
+---
+
+## 9. `src/core/text.ts` — Text Normalization Helpers
+
+This file provides **Unicode-aware text normalization** used across the DOM scanner, action executors, and intent router. It handles Arabic diacritics, letter variants, filler words, and plural/article canonicalization — all essential for matching section names, dropdown options, and filter values in a bilingual (Arabic/English) application.
+
+```ts
+function normalizeArabic(s: string): string {
+  return s
+    .replace(/[\u064B-\u065F\u0670]/g, '') // harakat / diacritics
+    .replace(/\u0640/g, '') // tatweel
+    .replace(/[أإآٱ]/g, 'ا')  // unify alef variants
+    .replace(/ة/g, 'ه')        // teh marbuta → heh
+    .replace(/ى/g, 'ي')        // alef maqsura → yeh
+}
+```
+
+- **What:** Strips Arabic diacritical marks (fatha, damma, kasra, sukun, shadda, etc.), the tatweel (kashida) elongation character, and normalizes common letter variants to a canonical form.
+- **Why:** Arabic text can be written with or without diacritics, and certain letters have multiple forms (e.g. أ, إ, آ, ٱ are all variants of alef). Without normalization, "الطلبات" and "الطَّلَبَات" would not match, and cross-page section lookups would fail.
+
+---
+
+```ts
+export function normalizeText(s: string): string {
+  return normalizeArabic(s.toLowerCase()).replace(/\s+/g, ' ').trim()
+}
+```
+
+- **What:** The primary normalization entry point. Lowercases the string, applies Arabic normalization, collapses all whitespace sequences to a single space, and trims.
+- **Why:** This is the foundation for ALL fuzzy comparisons in the codebase — `looseMatch`, `meaningfulWords`, `findMatchingOption` in actions.ts, and section matching in domScanner.ts all call this first.
+
+---
+
+```ts
+const FILLER_WORDS = new Set([
+  // English
+  'the', 'a', 'an', 'and', 'by', 'for', 'of', 'in', 'on', 'at', 'to', 'me', 'my',
+  'please', 'can', 'you', 'i', 'want', 'show', 'open', 'go', 'goto', 'take',
+  'navigate', 'view', 'display', 'page', 'screen', 'section', 'widget',
+  'chart', 'panel', 'tab', 'overview',
+  // Arabic
+  'في', 'الي', 'إلي', 'علي', 'من', 'عن', 'او', 'و', 'ثم', 'لو', 'سمحت',
+  'اعرض', 'أعرض', 'اظهر', 'أظهر', 'افتح', 'إفتح', 'انتقل', 'إنتقل', 'اذهب',
+  'خذني', 'وديني', 'صفحه', 'قسم', 'شاشه', 'لوحه', 'اريد', 'أريد', 'ابغي', 'ممكن',
+])
+```
+
+- **What:** A set of words that carry no semantic meaning for section/filter matching — articles, conjunctions, navigation verbs, and generic UI terms.
+- **Why:** When matching a user request like "show me the Sales Performance chart" against a section titled "Sales Performance", the words "show", "me", "the", "chart" should be ignored. Only the meaningful words "Sales" and "Performance" should drive the match. This applies to both English and Arabic.
+
+---
+
+```ts
+function canonicalWord(w: string): string {
+  let out = w
+  if (/^\p{Script=Arabic}/u.test(out) && out.length > 4 && out.startsWith('ال')) out = out.slice(2)
+  if (/^[a-z0-9]+$/.test(out) && out.length > 4) out = out.replace(/(es|s)$/, '')
+  return out
+}
+```
+
+- **What:** Produces a canonical word form for set comparison.
+- **`/^\p{Script=Arabic}/u`** — Unicode property escape that matches any Arabic-script character. This is how we detect the script without hardcoding Arabic Unicode ranges.
+- **`out.startsWith('ال')`** — Strips the Arabic definite article "ال" (al-, meaning "the") so "الطلبات" and "طلبات" compare equal.
+- **`out.replace(/(es|s)$/, '')`** — Strips trailing English plural suffixes so "applications" and "application" compare equal.
+- **Why:** Ensures singular/plural and definite/indefinite forms match. Without this, "الطلبات" would not match "طلبات" and every section lookup would require exact spelling.
+
+---
+
+```ts
+export function meaningfulWords(s: string): string[] {
+  return normalizeText(s)
+    .replace(/[^\p{L}\p{N} ]/gu, ' ')
+    .split(/\s+/)
+    .filter((w) => w.length >= 2 && !FILLER_WORDS.has(w))
+    .map(canonicalWord)
+}
+```
+
+- **What:** Splits a string into its meaningful, normalized words.
+- **`/[^\p{L}\p{N} ]/gu`** — Removes everything that's not a Unicode letter, digit, or space. This strips punctuation, emoji, and special characters while preserving Arabic script.
+- **`filter((w) => w.length >= 2 && !FILLER_WORDS.has(w))`** — Drops single-character words and filler/navigation words.
+- **`map(canonicalWord)`** — Canonicalizes each remaining word.
+- **Why:** This is the core word extraction logic used by the DOM scanner's section matching pass. When scanning for declared sections like "Sales Performance", each heading's text is processed through `meaningfulWords` and compared against the declared section name's `meaningfulWords`.
+
+---
+
+```ts
+export function containsAllWords(text: string, label: string): boolean {
+  const textWords = new Set(meaningfulWords(text))
+  const labelWords = meaningfulWords(label)
+  return labelWords.length > 0 && labelWords.every((w) => textWords.has(w))
+}
+```
+
+- **What:** Returns `true` when every meaningful word of `label` appears in `text`'s word set.
+- **Why:** This is an "all-words-contained" check — it ensures the label is a subset of the text, not an exact match. So "Sales Performance This Month" would match a heading that says "Sales Performance" because both meaningful words appear.
+
+---
+
+```ts
+export function looseMatch(a: string, b: string): boolean {
+  const na = normalizeText(a)
+  const nb = normalizeText(b)
+  if (!na || !nb) return false
+  return na === nb || na.includes(nb) || nb.includes(na)
+}
+```
+
+- **What:** Bidirectional containment match on normalized strings. Returns `true` if either normalized string contains the other.
+- **Why:** Used by action executors for option/value matching in dropdowns. If the LLM says `"active"` but the dropdown option is `"Active"` or `"Show Active Only"`, `looseMatch` still finds the match.
+
+---
+
+**Usage across the codebase:**
+
+| Consumer | Functions Used | Purpose |
+|---|---|---|
+| `domScanner.ts` | `meaningfulWords` | Match declared section names against heading text for the SECTION pass |
+| `actions.ts` | `normalizeText`, `looseMatch` | Fuzzy option/value matching in `findMatchingOption`, `selectOnDropdown`, and `findByText` |
+| Intent router | `containsAllWords` | Match user intent keywords against menu items and page labels |
 
 ---
 
@@ -1310,15 +1572,54 @@ export function scanInteractiveElements(
 
 ## 11. `src/page-controller/actions.ts` — DOM Actions
 
-This file contains all the functions that physically interact with the DOM — clicking, typing, selecting, scrolling, etc.
+This file contains all the functions that physically interact with the DOM — clicking, typing, selecting, scrolling, etc. Now uses `normalizeText` and `looseMatch` from `text.ts` for fuzzy matching. Supports 10 action types via individual `do*` functions and batch execution via `runActionQueue`.
 
 ```ts
-function waitForElement(selector: string, timeoutMs: number, doc: Document): Promise<Element | null> {
-  return new Promise((resolve) => {
-    const existing = doc.querySelector(selector)
-    if (existing) return resolve(existing)
-    const start = Date.now()
-    const check = () => {
+import { normalizeText } from '../core/text'
+// ...
+function findMatchingOption(value: string, options: string[]): string | undefined {
+  const normalizedQuery = normalizeText(value)
+  return options.find((option) => {
+    const normalizedOption = normalizeText(option)
+    return normalizedOption === normalizedQuery ||
+           normalizedOption.includes(normalizedQuery) ||
+           normalizedQuery.includes(normalizedOption)
+  })
+}
+```
+
+- **What:** A three-way bidirectional fuzzy match using `normalizeText` from `text.ts`. Matches exact, contains, or contained-by — all case-insensitive and Arabic-aware.
+- **Why:** The LLM might say `"active"` but the dropdown option is `"Active"` or `"Show Active Only"`. This handles all cases without requiring the LLM to guess the exact option text.
+
+---
+
+New actions added since the original version:
+
+| Action | Handler | Description |
+|---|---|---|
+| `clear` | `doClear` | Clears `<input>`, `<textarea>`, or `contentEditable` using the native prototype setter (to trigger React's change detection). |
+| `press_key` | `doPressKey` | Dispatches `keydown` → `keypress` → `keyup` sequence. Maps common key names (`enter`, `escape`, `tab`, `arrowup`, etc.) to their key codes. |
+| `hover` | `doHover` | Dispatches `mouseover` → `mouseenter` → `mousemove` events on the target element. |
+
+---
+
+```ts
+export async function runActionQueue(
+  actions: AgentAction[],
+  elementMap: Map<number, Element>,
+  doc: Document = document,
+  win: Window & typeof globalThis = window,
+): Promise<ActionQueueResult>
+```
+
+- **What:** Executes a batch of actions in order. Stops on the first failed action or explicit `done`. Returns `{ items, done, error? }` where `items` pairs each action with its result.
+- **Why:** The LLM now returns arrays of actions. This runs them sequentially without additional API round-trips, dramatically reducing latency for multi-action tasks like "apply filter A and filter B".
+
+**Key improvements in existing actions:**
+
+- **`doSelect` / `selectOnDropdown`**: Now handles MUI comboboxes robustly — opens via `mousedown` → `mouseup` → `click`, waits for the listbox portal, matches options using `normalizeText`, types into the input for search-as-you-type comboboxes, dismisses with Escape after selection, and returns available options on mismatch. Also includes **robust target resolution**: if the model targets a non-dropdown element, `findDropdownForValue` redirects to the dropdown whose options actually contain the requested value.
+- **`doInput`**: Now fires `blur` after input (needed by masked date pickers) and uses `InputEvent` with `inputType: 'insertFromPaste'` (needed by mask libraries).
+- **`doNavigate`**: Now polls `document.readyState` until `'complete'` instead of a fixed sleep, with a 4s cap.
       const el = doc.querySelector(selector)
       if (el) return resolve(el)
       if (Date.now() - start < timeoutMs) setTimeout(check, 50)
@@ -1559,64 +1860,39 @@ export async function runAction(action: AgentAction, elementMap: Map<number, Ele
 ## 12. `src/page-controller/PageController.ts` — Page Facade
 
 ```ts
-import type { AgentAction, ActionExecutionResult, PageObservation } from '../core/types'
-import { runAction } from './actions'
+import type { AgentAction, ActionExecutionResult, ActionQueueResult, PageObservation } from '../core/types'
+import { runAction, runActionQueue } from './actions'
 import { scanInteractiveElements } from './domScanner'
 
 export class PageController {
   private elementMap = new Map<number, Element>()
   private readonly targetFrame?: HTMLIFrameElement
+  private readonly declaredSections: string[]
+  private fallbackUrl = ''
 ```
 
-- **`elementMap`** – Persisted across calls. When `observe()` runs, it updates this map. When `executeAction()` runs, it uses this map. Both methods must share the same snapshot — they can't scan independently or indexes would be inconsistent.
+- **`elementMap`** – Persisted across calls. When `observe()` runs, it updates this map. When `executeAction()` / `executeActionQueue()` runs, it uses this map.
+- **`declaredSections`** – Section names from the `pages` config, passed to the scanner for `SECTION:` landmark generation.
+- **`fallbackUrl`** – Stored URL for cross-origin iframe scenarios where `contentWindow.location` is inaccessible.
 
 ---
 
-```ts
-  private getDocWin(): { doc: Document; win: Window & typeof globalThis } {
-    const win = (this.targetFrame?.contentWindow ?? window) as Window & typeof globalThis
-    const doc = this.targetFrame?.contentDocument ?? document
-    return { doc, win }
-  }
-```
+**New/changed methods:**
 
-- **What:** Returns the correct `document` and `window` objects — either from the host page or from an `<iframe>`.
-- **`contentWindow`** – The `window` object *inside* an iframe.
-- **`contentDocument`** – The `document` object *inside* an iframe.
-- **`?? window` / `?? document`** – Falls back to the main window/document if no iframe is configured.
+**`readUrl(): string`**  
+Safely reads the current URL, returning `""` on cross-origin errors. Keeps `fallbackUrl` in sync when readable.
 
----
+**`getEffectiveUrl(): string`**  
+Always returns a URL: real iframe URL when readable, otherwise the fallback provided by the host.
 
-```ts
-  observe(): PageObservation {
-    const { doc, win } = this.getDocWin()
-    const scan = scanInteractiveElements(doc, win)
-    this.elementMap = scan.elementMap    // ← updates the shared map
+**`setFallbackUrl(url: string): void`**  
+Stores a fallback URL. Called by the Agent after each navigation so the URL stays accurate for cross-origin iframes.
 
-    return {
-      url: win.location.href,
-      title: doc.title,
-      elements: scan.elements,
-      elementsText: scan.text,
-    }
-  }
-```
+**`waitForStability(idleMs = 180, maxMs = 1500): Promise<void>`**  
+Uses `MutationObserver` to wait until the DOM is quiet (no mutations for `idleMs`), capped at `maxMs`. Much faster than fixed sleeps on quick pages, more reliable on slow ones (async renders, React portals).
 
-- **Key design:** `this.elementMap = scan.elementMap` — every call to `observe()` refreshes the element map. This is essential because the DOM changes between steps (elements appear/disappear, re-render, etc.).
-
----
-
-```ts
-  async executeAction(action: AgentAction): Promise<ActionExecutionResult> {
-    const { doc, win } = this.getDocWin()
-    return runAction(action, this.elementMap, doc, win)
-  }
-}
-```
-
-- Passes the current `elementMap` to `runAction`. Since both `observe()` and `executeAction()` use the same `elementMap` instance, the index `3` used in an `observe()` result will correctly resolve to the same element in `executeAction()`.
-
----
+**`executeActionQueue(actions: AgentAction[]): Promise<ActionQueueResult>`**  
+Calls `runActionQueue(actions, elementMap, doc, win)`, then waits for stability after each `click`/`input`/`select` action. Returns the full `ActionQueueResult`.
 
 ## 13. `src/ui/Panel.ts` — The Floating UI Panel
 

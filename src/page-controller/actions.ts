@@ -3,7 +3,7 @@ import type {
   ActionQueueResult,
   AgentAction,
 } from "../core/types";
-import { normalizeText } from "../core/text";
+import { containsAllWords, meaningfulWords, normalizeArabic, normalizeText } from "../core/text";
 
 /** Poll until a DOM element matching selector appears, or timeoutMs elapses. */
 function waitForElement(
@@ -72,7 +72,9 @@ function getElement(
 
 function findMatchingOption(value: string, options: string[]): string | undefined {
   const normalizedQuery = normalizeText(value);
-  return options.find((option) => {
+
+  // Pass 1 — exact normalized match or bidirectional containment
+  let match = options.find((option) => {
     const normalizedOption = normalizeText(option);
     const hasText = normalizedOption.length > 0;
     return (
@@ -81,6 +83,27 @@ function findMatchingOption(value: string, options: string[]): string | undefine
       (hasText && normalizedQuery.includes(normalizedOption))
     );
   });
+  if (match) return match;
+
+  // Pass 2 — all meaningful words of the query must be present in the option
+  match = options.find((option) => containsAllWords(option, value));
+  if (match) return match;
+
+  // Pass 3 — prefix heuristic: first word of query matches first word of option
+  const queryWords = meaningfulWords(value);
+  if (queryWords.length > 0) {
+    match = options.find((option) => {
+      const optWords = meaningfulWords(option);
+      return optWords.length > 0 && optWords[0] === queryWords[0];
+    });
+  }
+  if (match) return match;
+
+  // Pass 4 — direct normalizeArabic on both sides (handles diacritic-heavy Arabic)
+  match = options.find((option) => normalizeArabic(option) === normalizeArabic(value));
+  if (match) return match;
+
+  return undefined;
 }
 
 /**
@@ -325,6 +348,27 @@ function doClick(
   });
 }
 
+/** Validate a date string against a format like "MM/DD/YYYY" or "DD-MM-YYYY". */
+function validateDateFormat(text: string, format: string): boolean {
+  const regexStr = format
+    .replace(/YYYY/g, '\\d{4}')
+    .replace(/MM/g, '\\d{2}')
+    .replace(/DD/g, '\\d{2}')
+    .replace(/[-/.]/g, (sep) => `\\${sep}`);
+  return new RegExp(`^${regexStr}$`).test(text);
+}
+
+/** Detect a date-format placeholder on an input element (e.g. "MM/DD/YYYY"). */
+function detectFormatFromPlaceholder(el: Element): string | null {
+  if (el.tagName.toLowerCase() !== 'input') return null;
+  const ph = ((el as HTMLInputElement).placeholder || '').trim();
+  if (!ph) return null;
+  if (/^[YMDHmsAP]{1,4}([/\-. :])[YMDHmsAP]{1,4}(\1[YMDHmsAP]{1,4})*$/i.test(ph)) {
+    return ph;
+  }
+  return null;
+}
+
 function doInput(
   index: number | undefined,
   text: string | undefined,
@@ -335,6 +379,33 @@ function doInput(
   const el = getElement(index, args, elementMap);
   if (!text) {
     throw new Error("Missing required arg: text");
+  }
+
+  // Date format validation: if the input has a date-format placeholder,
+  // verify the text matches it before dispatching events.
+  const fmt = detectFormatFromPlaceholder(el);
+  if (fmt) {
+    const originalText = text;
+    // Try DD Month YYYY → DD/MM/YYYY, e.g. "15 June 2024" → "15/06/2024"
+    // Only normalise when the format uses the same separator.
+    const sepMatch = fmt.match(/[/.\- :]/);
+    if (sepMatch && /^\d{1,2}\s+\w+\s+\d{4}$/i.test(text)) {
+      const parts = text.split(/\s+/);
+      const day = parts[0].padStart(2, '0');
+      const monthNames: Record<string, string> = {
+        january: '01', february: '02', march: '03', april: '04', may: '05', june: '06',
+        july: '07', august: '08', september: '09', october: '10', november: '11', december: '12',
+      };
+      const month = monthNames[parts[1].toLowerCase()] ?? parts[1];
+      const year = parts[2];
+      text = fmt.includes('DD') ? `${day}${sepMatch[0]}${month}${sepMatch[0]}${year}` : text;
+    }
+    if (!validateDateFormat(text, fmt)) {
+      return {
+        success: false,
+        message: `Date text "${originalText}" does not match required format "${fmt}". Use the exact format shown in the DATE INPUT placeholder.`,
+      };
+    }
   }
 
   const tag = el.tagName.toLowerCase();

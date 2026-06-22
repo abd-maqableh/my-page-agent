@@ -688,10 +688,27 @@ function findOpenModal(doc: Document): Element | null {
     candidates.add(el);
   });
 
-  // Pick the topmost visible candidate (last in document order wins — overlays render last).
-  const ordered = Array.from(candidates);
-  for (let i = ordered.length - 1; i >= 0; i -= 1) {
-    const c = ordered[i];
+  // Z-index heuristic — detect modal overlays by computed z-index > 100.
+  // Some UI frameworks render modals as plain <div>s without ARIA roles or
+  // modal-ish class names, relying solely on a high z-index to overlay.
+  doc.querySelectorAll(
+    '[class*="overlay"], [class*="backdrop"], [class*="modal"]',
+  ).forEach((el) => {
+    if (candidates.has(el)) return;
+    if (el.closest("[data-agent-panel]")) return;
+    const z = parseInt(win.getComputedStyle(el as HTMLElement).zIndex ?? "0", 10);
+    if (z > 100 && isVisible(el, win)) {
+      candidates.add(el);
+    }
+  });
+
+  // Pick the highest z-index candidate (modals with higher z-index are "on top").
+  const ordered = Array.from(candidates).sort((a, b) => {
+    const za = parseInt(win.getComputedStyle(a as HTMLElement).zIndex, 10) || 0;
+    const zb = parseInt(win.getComputedStyle(b as HTMLElement).zIndex, 10) || 0;
+    return zb - za;
+  });
+  for (const c of ordered) {
     const style = win.getComputedStyle(c as HTMLElement);
     if (!style || style.display === "none" || style.visibility === "hidden")
       continue;
@@ -757,6 +774,14 @@ export function scanInteractiveElements(
 
     const { label, description } = describeElement(el);
 
+    // Store the label on the element so action executors can read it back
+    // at runtime (e.g. to enforce SECTION-only restrictions).
+    try {
+      (el as HTMLElement).setAttribute?.("data-agent-label", label);
+    } catch {
+      // Non-HTMLElement (e.g. SVG) — skip.
+    }
+
     return {
       index,
       tag: el.tagName.toLowerCase(),
@@ -774,6 +799,19 @@ export function scanInteractiveElements(
   if (!openModal) {
     const sectionSet = new Set<Element>();
     const sections: Array<{ el: Element; name: string }> = [];
+
+    // 0) data-agent-section attributes — app developers can opt-in specific
+    //     sections by adding data-agent-section="Section Name" to any element.
+    //     These take priority over heuristic detection.
+    root.querySelectorAll("[data-agent-section]").forEach((el) => {
+      if (sectionSet.has(el)) return;
+      if (el.closest("[data-agent-panel]")) return;
+      if (!isVisible(el, win)) return;
+      const name = el.getAttribute("data-agent-section")?.trim();
+      if (!name || name.length < 3) return;
+      sectionSet.add(el);
+      sections.push({ el, name });
+    });
 
     // Meaningful-word matching is Unicode/Arabic-aware (shared core/text helper).
     const declaredWordSets = declaredSections.map((d) => ({

@@ -177,15 +177,19 @@
         },
         {
           "file": "ARCHITECTURE.md",
-          "hash": "6102199129237078226"
+          "hash": "17034018251108009992"
         },
         {
           "file": "CODEBASE.md",
-          "hash": "10578511989460582594"
+          "hash": "10229029383010970103"
         },
         {
           "file": "CODEBASE_EXPLAINED.md",
-          "hash": "12245243034889866207"
+          "hash": "7628230516958356447"
+        },
+        {
+          "file": "PLAN.md",
+          "hash": "11093053675246108145"
         },
         {
           "file": "PRODUCTION_CHECKLIST.md",
@@ -225,19 +229,19 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "9308327199767310147"
+          "hash": "6457475158687926569"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "15742597271404211703"
+          "hash": "8912957897942516016"
         },
         {
           "file": "src/core/text.ts",
-          "hash": "15206748292557477675"
+          "hash": "8664024779662178717"
         },
         {
           "file": "src/core/tools.ts",
-          "hash": "10665290992525775899"
+          "hash": "16671572718832875675"
         },
         {
           "file": "src/core/types.ts",
@@ -249,7 +253,7 @@
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "1229191095287678605"
+          "hash": "6073861248710487617"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -265,11 +269,11 @@
         },
         {
           "file": "src/page-controller/actions.ts",
-          "hash": "17155612139753838840"
+          "hash": "4506526524477848588"
         },
         {
           "file": "src/page-controller/domScanner.ts",
-          "hash": "6454925841453506712"
+          "hash": "12245881294009767393"
         },
         {
           "file": "src/style.css",
@@ -277,7 +281,7 @@
         },
         {
           "file": "src/test/agent.scenario.test.ts",
-          "hash": "8163050350676881922",
+          "hash": "17817265524930899956",
           "deps": [
             "npm:vitest"
           ]
@@ -291,7 +295,14 @@
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "2891173240319587739",
+          "hash": "18100092467009924451",
+          "deps": [
+            "npm:vitest"
+          ]
+        },
+        {
+          "file": "src/test/tools.test.ts",
+          "hash": "13174520758685179470",
           "deps": [
             "npm:vitest"
           ]

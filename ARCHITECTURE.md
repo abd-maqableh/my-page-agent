@@ -7,16 +7,17 @@
 ```mermaid
 flowchart TD
     User(["User (browser)"])
-    Panel["Panel UI\n(Panel.ts)"]
-    MyPageAgent["MyPageAgent\n(index.ts)"]
-    Agent["Agent\ncore/Agent.ts"]
-    LLMFactory["createLLMClient\nllm/createLLMClient.ts"]
-    OpenAI["OpenAIClient\nllm/OpenAIClient.ts\n(universal — works with\nOllama, Groq, Azure, etc.)"]
-    Normalizer["normalizeAction\ncore/tools.ts"]
-    PageCtrl["PageController\npage-controller/PageController.ts"]
-    Scanner["scanInteractiveElements\npage-controller/domScanner.ts"]
-    Actions["runAction\npage-controller/actions.ts"]
-    PromptBuilder["buildPrompt\ncore/prompt.ts"]
+    Panel["Panel UI<br/>(Panel.ts)"]
+    MyPageAgent["MyPageAgent<br/>(index.ts)"]
+    Agent["Agent<br/>core/Agent.ts"]
+    LLMFactory["createLLMClient<br/>llm/createLLMClient.ts"]
+    OpenAI["OpenAIClient<br/>llm/OpenAIClient.ts<br/>(universal — works with<br/>Ollama, Groq, Azure, etc.)"]
+    Normalizer["normalizeActions<br/>core/tools.ts"]
+    PageCtrl["PageController<br/>page-controller/PageController.ts"]
+    Scanner["scanInteractiveElements<br/>page-controller/domScanner.ts"]
+    Actions["runActionQueue / runAction<br/>page-controller/actions.ts"]
+    PromptBuilder["buildNavigationPrompt<br/>buildInteractionPrompt<br/>core/prompt.ts"]
+    TextUtils["text.ts<br/>normalizeText, meaningfulWords<br/>looseMatch, containsAllWords"]
     DOM[("Live Browser DOM")]
 
     %% Entry
@@ -24,89 +25,79 @@ flowchart TD
     Panel -->|"execute(task)"| MyPageAgent
     MyPageAgent -->|"delegates"| Agent
 
-    %% ── STEP LOOP ──────────────────────────────────────
-    subgraph LOOP ["Agent.execute() — step loop (max N steps)"]
+    %% ── TWO-PHASE or SINGLE-PHASE LOOP ──────────────────
+    subgraph LOOP ["Agent.execute() — two-phase or single-phase"]
         direction TB
 
-        OBS1["observe() → capture prevUrl"]
-        PROMPT["buildPrompt(task, obs, history, pages?)"]
-        LLM_REQ["client.getNextAction(messages)"]
-        CONFIRM{"confirmAction\ngate?"}
-        EXEC["executeAction(action)"]
-        SETTLE["wait 600 ms\nif click/input/select"]
-        OBS2["observe() again → capture nextUrl"]
+        PHASE1["Phase 1: Navigation<br/>buildNavigationPrompt → LLM → navigate"]
+        WAIT["waitForStability + onPageReady"]
 
-        NAV_CHK{"URL changed?\n(nextUrl ≠ prevUrl)"}
-        UUID_CHK{"New URL contains\nUUID? (list→detail)"}
-        DONE_DETAIL1(["return done\n(navigatedToDetail)"])
+        subgraph PHASE2 ["Phase 2: Interaction loop (max N batches)"]
+            OBS["observe() → scan DOM"]
+            PROMPT2["buildInteractionPrompt(task, obs, pages, history)"]
+            LLM_REQ2["client.getNextActions(messages)"]
+            CONFIRM2{"confirmAction<br/>gate?"}
+            EXECQ["executeActionQueue(batch)"]
+            WAITSTABLE["waitForStability after<br/>click/input/select"]
 
-        MENU_CHK{"action=click\n&& !navigated\n&& MENU ITEMs visible?"}
-        MENU_AUTO["Auto-click matching\nmenu item\n(view/edit intent)"]
-        WAIT_MENU["wait 800 ms"]
-        MENU_UUID{"afterMenuUrl\ncontains UUID?"}
-        DONE_MENU(["return done\n(menu→detail nav)"])
+            CHK{"done in batch<br/>or auto-done?"}
+            DONE2(["return done"])
+            NEXT(["next batch"])
+        end
 
-        ACTION_CHK{"action=done\nor result.done?"}
-        DONE_NORMAL(["return done"])
-        NEXT_STEP["next step →"]
-        MAX(["return max_steps"])
-        ERR(["return error"])
+        SINGLE["Single-phase: observe → buildInteractionPrompt → getNextActions → executeActionQueue"]
 
-        OBS1 --> PROMPT --> LLM_REQ
-        LLM_REQ -->|"AgentAction"| CONFIRM
-        CONFIRM -->|"allowed"| EXEC
-        CONFIRM -->|"rejected"| ERR
-        LLM_REQ -->|"LLM error"| ERR
-        EXEC --> SETTLE --> OBS2
-        OBS2 --> NAV_CHK
-        NAV_CHK -->|"yes"| UUID_CHK
-        NAV_CHK -->|"no"| MENU_CHK
-        UUID_CHK -->|"yes"| DONE_DETAIL1
-        UUID_CHK -->|"no → annotate result"| MENU_CHK
-        MENU_CHK -->|"yes"| MENU_AUTO --> WAIT_MENU --> MENU_UUID
-        MENU_UUID -->|"yes"| DONE_MENU
-        MENU_UUID -->|"no"| NEXT_STEP
-        MENU_CHK -->|"no"| ACTION_CHK
-        ACTION_CHK -->|"yes"| DONE_NORMAL
-        ACTION_CHK -->|"no"| NEXT_STEP
-        NEXT_STEP -->|"step < maxSteps"| OBS1
-        NEXT_STEP -->|"step = maxSteps"| MAX
-        EXEC -->|"result.success=false"| ERR
+        PHASE1 --> WAIT --> OBS
+        OBS --> PROMPT2 --> LLM_REQ2
+        LLM_REQ2 -->|"AgentAction[]"| CONFIRM2
+        CONFIRM2 -->|"allowed"| EXECQ
+        CONFIRM2 -->|"rejected"| ERR(["return error"])
+        LLM_REQ2 -->|"LLM error"| ERR
+        EXECQ --> WAITSTABLE --> CHK
+        CHK -->|"yes"| DONE2
+        CHK -->|"no"| NEXT
+        NEXT -->|"batch < maxSteps"| OBS
+        NEXT -->|"batch = maxSteps"| MAX(["return max_steps"])
+
+        SINGLE --> OBS
     end
 
     %% ── DOM scanning ──────────────────────────────────
-    Agent --> OBS1
+    Agent --> OBS
     PageCtrl -->|"scanInteractiveElements(doc, win, declaredSections)"| Scanner
     Scanner -->|"reads"| DOM
     Scanner -->|"ScanResult {elements, elementMap, text}"| PageCtrl
     PageCtrl -->|"PageObservation"| Agent
 
+    %% ── Text normalization ────────────────────────────
+    Scanner -.->|"normalizeText, meaningfulWords"| TextUtils
+    Actions -.->|"normalizeText, looseMatch"| TextUtils
+
     %% ── Prompt building ───────────────────────────────
-    PROMPT --> PromptBuilder
-    PromptBuilder -->|"ChatMessage[]"| LLM_REQ
+    PROMPT2 --> PromptBuilder
+    PromptBuilder -->|"ChatMessage[]"| LLM_REQ2
 
     %% ── LLM clients ───────────────────────────────────
-    LLM_REQ --> LLMFactory
+    LLM_REQ2 --> LLMFactory
     LLMFactory --> OpenAI
     OpenAI -->|"raw JSON"| Normalizer
-    Normalizer -->|"AgentAction"| CONFIRM
+    Normalizer -->|"AgentAction[]"| CONFIRM2
 
     %% ── DOM execution ─────────────────────────────────
-    EXEC --> PageCtrl
-    PageCtrl -->|"runAction()"| Actions
-    Actions -->|"click / input / select\nscroll / wait / navigate / done"| DOM
-    Actions -->|"ActionExecutionResult"| PageCtrl
+    EXECQ --> PageCtrl
+    PageCtrl -->|"runActionQueue()"| Actions
+    Actions -->|"click / input / select / scroll / wait / navigate / done / clear / press_key / hover"| DOM
+    Actions -->|"ActionQueueResult"| PageCtrl
 
     %% ── Callbacks ─────────────────────────────────────
     Agent -->|"onStatus callback"| MyPageAgent
     Agent -->|"onStep callback"| MyPageAgent
+    Agent -->|"onPageReady callback"| MyPageAgent
     MyPageAgent -->|"status string"| Panel
     MyPageAgent -->|"formatted step line"| Panel
 
     %% ── Final result ──────────────────────────────────
-    DONE_NORMAL --> MyPageAgent
-    DONE_DETAIL1 --> MyPageAgent
-    DONE_MENU --> MyPageAgent
+    DONE2 --> MyPageAgent
     MAX --> MyPageAgent
     ERR --> MyPageAgent
     MyPageAgent -->|"AgentRunResult"| Panel
@@ -130,27 +121,34 @@ classDiagram
     }
 
     class Agent {
-        -maxSteps: number
         -client: LLMClient
         -pageController: PageController
         -callbacks: AgentCallbacks
         -confirmAction: Function
         -pages: Record
+        -twoPhase: boolean
         +execute(task) AgentRunResult
+        -executeTwoPhase(task) AgentRunResult
+        -executeSinglePhase(task) AgentRunResult
     }
 
     class PageController {
         -elementMap: Map~number, Element~
         -targetFrame: HTMLIFrameElement
         -declaredSections: string[]
+        -fallbackUrl: string
         -getDocWin() DocWin
         +observe() PageObservation
         +executeAction(action) ActionExecutionResult
+        +executeActionQueue(actions) ActionQueueResult
+        +getEffectiveUrl() string
+        +setFallbackUrl(url) void
+        +waitForStability(idleMs, maxMs) Promise~void~
     }
 
     class OpenAIClient {
         -config: LLMConfig
-        +getNextAction(messages) AgentAction
+        +getNextActions(messages) AgentAction[]
     }
 
     class Panel {
@@ -166,20 +164,20 @@ classDiagram
 
     class LLMClient {
         <<interface>>
-        +getNextAction(messages) AgentAction
+        +getNextActions(messages) AgentAction[]
     }
 
     MyPageAgent --> Agent : creates & wraps
     MyPageAgent --> Panel : wired via mountAgentPanel()
     Agent --> PageController : observe + execute
-    Agent --> LLMClient : getNextAction
+    Agent --> LLMClient : getNextActions
     LLMClient <|.. OpenAIClient : implements
     Panel --> MyPageAgent : calls execute / listens to events
 ```
 
 ---
 
-## 3. Sequence Diagram — One Agent Step
+## 3. Sequence Diagram — Two-Phase Execution
 
 ```mermaid
 sequenceDiagram
@@ -198,7 +196,36 @@ sequenceDiagram
     Panel->>MyPageAgent: execute(task)
     MyPageAgent->>Agent: execute(task)
 
-    loop Step 1…maxSteps
+    alt twoPhase enabled
+        Note over Agent: Phase 1 — Navigation
+        Agent->>PageCtrl: getEffectiveUrl()
+        PageCtrl-->>Agent: currentUrl
+        Agent->>Agent: findMatchingPage(currentUrl, pages)
+
+        alt already on correct page
+            Agent-->>Agent: skip navigation
+        else need to navigate
+            Agent->>Prompt: buildNavigationPrompt(task, pages, currentUrl)
+            Prompt-->>Agent: ChatMessage[]
+            Agent->>LLM: getNextActions(messages)
+            LLM-->>Agent: AgentAction[] [navigate, done]
+            Agent->>PageCtrl: executeActionQueue([navigate])
+            PageCtrl->>Actions: runActionQueue
+            Actions->>DOM: doNavigate → location.href = url
+            Actions-->>PageCtrl: ActionQueueResult
+            PageCtrl-->>Agent: ActionQueueResult
+        end
+
+        Note over Agent: Wait for iframe to load
+        Agent->>MyPageAgent: onPageReady()
+        MyPageAgent-->>Agent: resolved
+        Agent->>PageCtrl: waitForStability(300, 3000)
+        PageCtrl-->>Agent: DOM settled
+    end
+
+    Note over Agent: Phase 2 — Interaction loop
+
+    loop Batch 1…maxSteps
         Agent->>PageCtrl: observe()
         PageCtrl->>Scanner: scanInteractiveElements(doc, win, declaredSections)
         Scanner->>DOM: querySelectorAll(INTERACTIVE_SELECTOR)
@@ -206,52 +233,35 @@ sequenceDiagram
         Scanner-->>PageCtrl: ScanResult {elements, elementMap, text}
         PageCtrl-->>Agent: PageObservation {url, title, elements, elementsText}
 
-        Note over Agent: capture prevUrl
-
-        Agent->>Prompt: buildPrompt(task, obs, history, pages?)
+        Agent->>Prompt: buildInteractionPrompt(task, obs, pages, history)
         Prompt-->>Agent: ChatMessage[] [system + user]
 
-        Agent->>LLM: getNextAction(messages)
-        LLM-->>Agent: AgentAction {thought, action, args}
+        Agent->>LLM: getNextActions(messages)
+        LLM-->>Agent: AgentAction[] [{select}, {select}, {done}]
 
         alt confirmAction gate configured
-            Agent->>Agent: confirmAction(action)
-            Agent-->>Agent: allowed / rejected
+            loop each action
+                Agent->>Agent: confirmAction(action)
+            end
         end
 
-        Agent->>PageCtrl: executeAction(action)
-        PageCtrl->>Actions: runAction(action, elementMap, doc, win)
-        Actions->>DOM: doClick / doInput / doSelect / doScroll / doWait / doNavigate
-        DOM-->>Actions: DOM updated
-        Actions-->>PageCtrl: ActionExecutionResult
-        PageCtrl-->>Agent: ActionExecutionResult
-
-        Note over Agent: wait 600ms if click/input/select
-
-        Agent->>PageCtrl: observe() — capture nextUrl
-        PageCtrl-->>Agent: PageObservation (post-action)
-
-        alt URL changed && UUID in new URL
-            Agent-->>MyPageAgent: return done (navigatedToDetail)
-        else URL changed (no UUID)
-            Note over Agent: annotate result with → navigated to URL
-        else click && no navigation && MENU ITEMs visible
-            Agent->>PageCtrl: executeAction(click menuItem)
-            PageCtrl->>Actions: runAction(click, menuIndex)
-            Actions->>DOM: click MENU ITEM
+        Agent->>PageCtrl: executeActionQueue(batch)
+        PageCtrl->>Actions: runActionQueue(actions, elementMap, doc, win)
+        loop each action in batch
+            Actions->>DOM: doClick / doInput / doSelect / …
             DOM-->>Actions: DOM updated
-            Actions-->>PageCtrl: ActionExecutionResult
-            PageCtrl-->>Agent: result
-            Note over Agent: wait 800ms
-            alt afterMenuUrl contains UUID
-                Agent-->>MyPageAgent: return done (menu→detail)
-            else
-                Note over Agent: continue loop
-            end
-        else action=done or result.done
+            Actions-->>PageCtrl: ActionQueueItemResult
+        end
+        PageCtrl->>PageCtrl: waitForStability after click/input/select
+        PageCtrl-->>Agent: ActionQueueResult
+
+        alt done in batch
             Agent-->>MyPageAgent: return done
-        else result.success=false
-            Agent-->>MyPageAgent: return error
+        else auto-done: URL changed or second+ iter with interaction
+            Agent-->>MyPageAgent: return done
+        else continue
+            Agent->>PageCtrl: waitForStability(300, 2000)
+            Note over Agent: next batch
         end
 
         Agent->>MyPageAgent: onStatus(status)
@@ -273,41 +283,40 @@ sequenceDiagram
 stateDiagram-v2
     [*] --> Idle : agent created
 
-    Idle --> Observing : execute(task) called
+    Idle --> Phase1 : execute(task) — twoPhase=true
+    Idle --> Observing : execute(task) — twoPhase=false
 
-    state "Step Loop" as Loop {
-        Observing --> Building : PageObservation captured
-        Building --> Thinking : ChatMessage[] ready
-        Thinking --> Confirming : AgentAction received
-        Confirming --> Executing : confirmAction = true
-        Confirming --> [*] : confirmAction = false → error
-        Thinking --> [*] : LLM error → error
-        Executing --> Settling : action dispatched to DOM
-        Settling --> PostObserve : 600ms elapsed
-        PostObserve --> CheckNav : nextUrl captured
-
-        state CheckNav {
-            [*] --> NavDetect
-            NavDetect --> DetailDone : URL changed + UUID found
-            NavDetect --> MenuCheck : URL unchanged
-            NavDetect --> AnnotateNav : URL changed, no UUID
-            AnnotateNav --> MenuCheck
-            MenuCheck --> AutoMenu : MENU ITEMs visible after click
-            MenuCheck --> ActionCheck : no menu
-            AutoMenu --> MenuDetailDone : afterMenuUrl has UUID
-            AutoMenu --> ActionCheck : no UUID after menu
-            ActionCheck --> NormalDone : action=done or result.done
-            ActionCheck --> NextStep : task continues
-            ActionCheck --> [*] : result.success=false → error
-        }
-
-        NextStep --> Observing : step < maxSteps
+    state "Two-Phase Flow" as TwoPhase {
+        Phase1 --> NavCheck : getEffectiveUrl
+        NavCheck --> NavLLM : page not matched / task asks for other page
+        NavCheck --> WaitPage : already on correct page
+        NavLLM --> Navigate : LLM returns navigate
+        Navigate --> WaitPage : navigation done
+        WaitPage --> Observing : onPageReady + stability
     }
 
-    NextStep --> [*] : step = maxSteps → max_steps
+    state "Batch Loop" as Loop {
+        Observing --> Building : PageObservation captured
+        Building --> Thinking : ChatMessage[] ready
+        Thinking --> Confirming : AgentAction[] received
+        Confirming --> Executing : all confirmed
+        Confirming --> [*] : rejected → error
+        Thinking --> [*] : LLM error → error
+        Executing --> Settling : batch executed
+        Settling --> PostObserve : stability waited
+
+        PostObserve --> DoneCheck
+        DoneCheck --> NormalDone : done in batch
+        DoneCheck --> AutoDone : URL changed or second+ iter
+        DoneCheck --> NextStep : continue
+        DoneCheck --> [*] : action failed → error
+
+        NextStep --> Observing : batch < maxSteps
+    }
+
+    NextStep --> [*] : batch = maxSteps → max_steps
     NormalDone --> [*] : status = done
-    DetailDone --> [*] : status = done
-    MenuDetailDone --> [*] : status = done
+    AutoDone --> [*] : status = done
 ```
 
 ---
@@ -316,24 +325,24 @@ stateDiagram-v2
 
 ```mermaid
 flowchart LR
-    RAW["Raw LLM text\n(may have markdown fences,\nextra prose)"]
-    FENCE["Strip markdown\ncode fences"]
-    EXTRACT["extractJSON()\nbalanced-bracket\ncursor walk"]
+    RAW["Raw LLM text<br/>(may have markdown fences,<br/>extra prose)"]
+    FENCE["Strip markdown<br/>code fences"]
+    EXTRACT["extractJSON()<br/>balanced-bracket<br/>cursor walk<br/>(supports { } and [ ])"]
     PARSE["JSON.parse()"]
-    NORMALIZE["normalizeAction()\n• validate action name\n• hoist flat args\n• extract index from thought"]
-    ACTION["AgentAction\n{thought, action, args}"]
+    NORMALIZE["normalizeActions()<br/>• single action → [action]<br/>• {actions:[...]} → AgentAction[]<br/>• [...] → AgentAction[]<br/>• validates each action<br/>• hoists flat args<br/>• extracts index from thought"]
+    ACTIONS["AgentAction[]<br/>[{thought, action, args}, …]"]
 
-    ERR1(["throw: no JSON object"])
+    ERR1(["throw: no JSON found"])
     ERR2(["throw: invalid JSON"])
-    ERR3(["throw: invalid action name"])
+    ERR3(["throw: no valid actions"])
 
     RAW --> FENCE --> EXTRACT
-    EXTRACT -->|"no { found"| ERR1
-    EXTRACT -->|"balanced JSON string"| PARSE
+    EXTRACT -->|"no { or [ found"| ERR1
+    EXTRACT -->|"balanced JSON"| PARSE
     PARSE -->|"SyntaxError"| ERR2
-    PARSE -->|"object"| NORMALIZE
-    NORMALIZE -->|"unknown action"| ERR3
-    NORMALIZE -->|"valid"| ACTION
+    PARSE -->|"object or array"| NORMALIZE
+    NORMALIZE -->|"0 actions"| ERR3
+    NORMALIZE -->|"valid"| ACTIONS
 ```
 
 ---
@@ -343,32 +352,95 @@ flowchart LR
 ```mermaid
 flowchart TD
     ROOT["document / iframe.contentDocument"]
-    QSA["querySelectorAll\n(button, a, input, textarea,\nselect, role=button/link/\ntextbox/combobox/menuitem/option,\n onclick , tabindex )"]
-    DEDUP["deduplicate\n& filter visible"]
-    PANEL["exclude\n data-agent-panel \nelements"]
-    INDEX["assign 1-based indexes\nbuild elementMap"]
-    LABEL["getLabel(el)\npriority chain"]
+    QSA["querySelectorAll<br/>(button, a, input, textarea,<br/>select, role=button/link/<br/>textbox/combobox/menuitem/option,<br/> onclick , tabindex )"]
+    DEDUP["deduplicate<br/>& filter visible"]
+    PANEL["exclude<br/> data-agent-panel <br/>elements"]
+    MODAL["modal filter:<br/>only elements inside<br/>open dialog when modal present"]
+    INDEX["assign 1-based indexes<br/>build elementMap"]
+    DESCRIBE["describeElement(el)<br/>rich label + description"]
 
-    subgraph LABEL_CHAIN ["Label priority"]
-        L1["aria-label"]
-        L2["title attr"]
-        L3["input: label tag / placeholder"]
-        L4["select: FILTER DROPDOWN: {selected}"]
-        L5["combobox: FILTER DROPDOWN: {text}"]
-        L6["menuitem: MENU ITEM: {text}"]
-        L7["option: DROPDOWN OPTION: {text}"]
-        L8["ellipsis btn: Per-item actions menu (title)"]
-        L9["textContent fallback"]
-        L10["tagName element"]
-        L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7 --> L8 --> L9 --> L10
+    subgraph DESCRIBE_CHAIN ["descriptor resolution"]
+        L1["agent meta attrs<br/>(data-agent-name/value/options)"]
+        L2["aria-label / aria-labelledby"]
+        L3["fieldNameFor: label[for], wrapping label"]
+        L4["combobox: options + selection"]
+        L5["select: options + selection"]
+        L6["input: type-specific prefix"]
+        L7["textContent fallback"]
+        L8["tagName element"]
+        L1 --> L2 --> L3 --> L4 --> L5 --> L6 --> L7 --> L8
     end
 
-    TEXT["serialise to text block\n[1] button "Submit"\n[2] input:text "Search"\n…"]
-    RESULT["ScanResult\n{elements, elementMap, text}"]
+    SECTION["Section pass:<br/>match declaredSections<br/>via meaningfulWords"]
+    TEXT["serialise to JSON<br/>[{index, tag, role, type, label, description, kind}, …]"]
+    RESULT["ScanResult<br/>{elements, elementMap, text}"]
 
-    ROOT --> QSA --> DEDUP --> PANEL --> INDEX --> LABEL
-    LABEL --> LABEL_CHAIN
-    INDEX --> TEXT
-    LABEL_CHAIN --> TEXT
+    ROOT --> QSA --> DEDUP --> PANEL --> MODAL --> INDEX --> DESCRIBE
+    DESCRIBE --> DESCRIBE_CHAIN
+    INDEX --> SECTION
+    DESCRIBE_CHAIN --> TEXT
+    SECTION --> TEXT
     TEXT --> RESULT
 ```
+
+---
+
+## 7. Text Normalization Layer (text.ts)
+
+```mermaid
+flowchart LR
+    INPUT["Raw string<br/>(Arabic, English, mixed)"]
+    NORM_AR["normalizeArabic<br/>strip diacritics/tatweel<br/>unify alef variants"]
+    NORM["normalizeText<br/>lowercase + collapse whitespace"]
+    WORDS["meaningfulWords<br/>split, filter fillers,<br/>canonicalize (strip ال, -s/-es)"]
+    CONTAINS["containsAllWords<br/>set intersection check"]
+    LOOSE["looseMatch<br/>bidirectional containment"]
+
+    INPUT --> NORM_AR --> NORM
+    NORM --> WORDS
+    WORDS --> CONTAINS
+    NORM --> LOOSE
+
+    style NORM_AR fill:#e2e8f0,stroke:#64748b
+    style NORM fill:#e2e8f0,stroke:#64748b
+    style WORDS fill:#dbeafe,stroke:#3b82f6
+    style CONTAINS fill:#dcfce7,stroke:#22c55e
+    style LOOSE fill:#dcfce7,stroke:#22c55e
+```
+
+`text.ts` provides Unicode-aware (Arabic + Latin) text normalization shared by the DOM scanner (section matching), actions (option/value matching), and the intent router. It strips Arabic diacritics, unifies letter variants, filters navigation filler words, and canonicalizes plurals/articles for robust fuzzy comparison.
+
+---
+
+## 8. Prompt Architecture (Split)
+
+```mermaid
+flowchart TD
+    TASK["User Task"]
+    PAGES["Pages Config<br/>(paths + sections + subPages)"]
+    OBS["PageObservation<br/>(url, title, elements, elementsText)"]
+    HISTORY["Completed Steps<br/>(AgentHistoryEntry[])"]
+
+    NAV["buildNavigationPrompt<br/>PHASE 1 — Navigation only<br/>• No DOM elements<br/>• Only pages config<br/>• Returns: navigate + done"]
+    INTERACT["buildInteractionPrompt<br/>PHASE 2 — Interaction<br/>• Full DOM scan<br/>• Filter map<br/>• Completed steps<br/>• Returns: action batch + done"]
+
+    FILTER["buildFilterMap<br/>value → dropdown index<br/>lookup table"]
+
+    TASK --> NAV
+    TASK --> INTERACT
+    PAGES --> NAV
+    PAGES --> INTERACT
+    OBS --> INTERACT
+    OBS --> FILTER
+    HISTORY --> INTERACT
+    FILTER --> INTERACT
+
+    NAV -->|"ChatMessage[]"| LLM1["LLM (Phase 1)"]
+    INTERACT -->|"ChatMessage[]"| LLM2["LLM (Phase 2)"]
+```
+
+The prompt system is now **split into two functions**:
+- **`buildNavigationPrompt`** — Phase 1 only. Minimal prompt with no DOM elements; the LLM only decides which page to `navigate` to.
+- **`buildInteractionPrompt`** — Phase 2 (and single-phase). Full DOM scan with filter map, completed steps, and all interaction rules.
+- **`buildFilterMap`** — Helper that builds a "value → dropdown index" lookup table so the LLM doesn't need to parse JSON to find which dropdown has which option.
+- `buildPrompt` is kept as a **deprecated alias** for `buildInteractionPrompt` for backward compatibility.

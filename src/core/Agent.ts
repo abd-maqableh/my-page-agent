@@ -310,6 +310,25 @@ export class Agent {
         }
       }
 
+      // ── Retry-loop guard: detect repeated failed action ──────────────
+      const lastFailedEntry = [...history].reverse().find((h) => !h.result.success);
+      if (lastFailedEntry) {
+        for (const a of interactActions) {
+          if (
+            a.action !== "done" &&
+            a.action === lastFailedEntry.action.action &&
+            a.args?.index === lastFailedEntry.action.args?.index
+          ) {
+            this.callbacks?.onStatus?.("Error");
+            return {
+              status: "error",
+              history,
+              message: `Agent stuck: repeated the same failed action "${a.action}" on index ${a.args?.index}. Aborting.`,
+            };
+          }
+        }
+      }
+
       this.callbacks?.onStatus?.("Executing actions");
       // Strip navigate (Phase 2 must not reload the page) and stop the batch at
       // the first `done` so we never execute actions after the model signals completion.
@@ -338,6 +357,77 @@ export class Agent {
       if (queue.error) {
         this.callbacks?.onStatus?.("Error");
         return { status: "error", history, message: queue.error };
+      }
+
+      // ── Post-submit validation re-scan ───────────────────────────────
+      // After any click/input/select, re-observe and check for visible
+      // error indicators before letting the LLM decide it's done.
+      const hadMutatingAction = batchToRun.some((a) =>
+        ["click", "input", "select"].includes(a.action),
+      );
+      if (hadMutatingAction) {
+        const postObs = this.pageController.observe();
+        const hasErrors = postObs.elements.some(
+          (el) =>
+            el.label.toLowerCase().includes("error") ||
+            el.description?.toLowerCase().includes("invalid") ||
+            el.description?.toLowerCase().includes("required"),
+        );
+        if (hasErrors) {
+          this.pushHistory(history, history.length + 1, postObs.elementsText, {
+            action: "wait",
+            args: { timeoutMs: 0 },
+          } as AgentAction, {
+            success: true,
+            message:
+              "Validation errors are visible on the page after the last action. Task is NOT complete yet.",
+          });
+          // Skip the done/auto-done checks below and go to next iteration.
+          await this.pageController.waitForStability(300, 2000);
+          iterStep += 1;
+          continue;
+        }
+      }
+
+      // ── Menu auto-click ──────────────────────────────────────────────
+      // After a click that didn't trigger navigation, check if a context
+      // menu opened (new MENU ITEM: elements appeared). If so, auto-click
+      // the item that best matches the task without another LLM round-trip.
+      const lastClick = [...queue.items]
+        .reverse()
+        .find((i) => i.action.action === "click" && i.result.success);
+      if (lastClick) {
+        const menuObs = this.pageController.observe();
+        const menuItems = menuObs.elements.filter((el) =>
+          el.label.startsWith("MENU ITEM:"),
+        );
+        if (menuItems.length > 0) {
+          const taskLower = task.toLowerCase();
+          const intentMatch = menuItems.find((item) => {
+            const label = item.label.replace("MENU ITEM:", "").trim().toLowerCase();
+            return (
+              /\b(view|open|see|show|display|edit)\b/i.test(taskLower) &&
+              (taskLower.includes(label) || label.includes(taskLower.split(" ").slice(-1)[0]))
+            );
+          });
+          const target = intentMatch ?? menuItems[0];
+          const menuAction: AgentAction = {
+            action: "click",
+            args: { index: target.index },
+          };
+          const menuResult = await this.pageController.executeActionQueue([
+            menuAction,
+          ]);
+          menuResult.items.forEach((item, idx) => {
+            this.pushHistory(
+              history,
+              history.length + 1 + idx,
+              menuObs.elementsText,
+              item.action,
+              item.result,
+            );
+          });
+        }
       }
 
       // If the batch included `done`, the task is finished.

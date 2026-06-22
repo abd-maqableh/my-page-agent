@@ -5,13 +5,15 @@
  */
 
 /** Strip Arabic diacritics/tatweel and unify common letter variants. */
-function normalizeArabic(s: string): string {
+export function normalizeArabic(s: string): string {
   return s
     .replace(/[\u064B-\u065F\u0670]/g, '') // harakat / diacritics
     .replace(/\u0640/g, '') // tatweel
-    .replace(/[أإآٱ]/g, 'ا')
-    .replace(/ة/g, 'ه')
-    .replace(/ى/g, 'ي')
+    .replace(/[أإآٱ]/g, 'ا') // unify alef variants → bare alef
+    .replace(/ة/g, 'ه') // teh marbuta → heh
+    .replace(/ى/g, 'ي') // alef maqsura → yeh
+    .replace(/\u0643/g, '\u06A9') // Arabic kaf → extended kaf (Persian overlap)
+    .replace(/\u06CC/g, '\u064A') // Farsi yeh → Arabic yeh
 }
 
 /** Lowercase, normalize Arabic variants, collapse whitespace. */
