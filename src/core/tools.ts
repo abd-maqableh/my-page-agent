@@ -110,8 +110,19 @@ export function normalizeAction(input: unknown, elementCount?: number): AgentAct
 
   const args = Object.keys(mergedArgs).length > 0 ? (mergedArgs as AgentAction['args']) : undefined
 
+  // --- Step 5: preserve reflection fields ---
+  const reflectionFields = ['evaluation_previous_goal', 'memory', 'next_goal'] as const
+  const reflection: Partial<Pick<AgentAction, typeof reflectionFields[number]>> = {}
+  for (const field of reflectionFields) {
+    const val = raw[field]
+    if (typeof val === 'string') {
+      reflection[field] = val
+    }
+  }
+
   return {
     thought: typeof raw.thought === 'string' ? raw.thought : undefined,
+    ...reflection,
     action: resolvedAction,
     args,
   }

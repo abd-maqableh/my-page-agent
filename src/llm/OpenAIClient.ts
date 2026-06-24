@@ -1,14 +1,187 @@
 import { normalizeActions } from '../core/tools'
 import type { AgentAction, ChatMessage, LLMClient, LLMConfig } from '../core/types'
 
+interface ToolDefinition {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
+}
+
+/** Tool definitions for each agent action — replaces `response_format`. */
+const ACTION_TOOLS: ToolDefinition[] = [
+  {
+    type: 'function',
+    function: {
+      name: 'click',
+      description: 'Click on an element by index (buttons, links, tabs, checkboxes)',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index to click' },
+          evaluation_previous_goal: { type: 'string', description: 'Was the last action successful? What changed?' },
+          memory: { type: 'string', description: 'Key facts to remember for future steps' },
+          next_goal: { type: 'string', description: 'What to do next and why' },
+        },
+        required: ['index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'input',
+      description: 'Type text into a text field or search box by element index',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index to type into' },
+          text: { type: 'string', description: 'Text to input' },
+          evaluation_previous_goal: { type: 'string' },
+          memory: { type: 'string' },
+          next_goal: { type: 'string' },
+        },
+        required: ['index', 'text'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'select',
+      description: 'Select an option from a dropdown or combobox by element index',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index of the dropdown' },
+          value: { type: 'string', description: 'Option value to select' },
+          evaluation_previous_goal: { type: 'string' },
+          memory: { type: 'string' },
+          next_goal: { type: 'string' },
+        },
+        required: ['index', 'value'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'scroll',
+      description: 'Scroll the page or a specific element into view',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index to scroll to' },
+          direction: { type: 'string', enum: ['up', 'down'], description: 'Scroll direction' },
+          amount: { type: 'number', description: 'Number of pages to scroll' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'wait',
+      description: 'Wait for a specified time in milliseconds',
+      parameters: {
+        type: 'object',
+        properties: {
+          timeoutMs: { type: 'number', description: 'Milliseconds to wait' },
+        },
+        required: ['timeoutMs'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'navigate',
+      description: 'Navigate the iframe to a different page path',
+      parameters: {
+        type: 'object',
+        properties: {
+          url: { type: 'string', description: 'The page path to navigate to (e.g., /applications)' },
+        },
+        required: ['url'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'done',
+      description: 'Signal that the task is complete, with a result summary',
+      parameters: {
+        type: 'object',
+        properties: {
+          result: { type: 'string', description: 'Summary of what was accomplished' },
+        },
+        required: ['result'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'clear',
+      description: 'Clear the content of an input element by index',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index to clear' },
+        },
+        required: ['index'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'press_key',
+      description: 'Press a keyboard key, optionally focused on a specific element',
+      parameters: {
+        type: 'object',
+        properties: {
+          key: { type: 'string', description: 'Key to press (e.g., Enter, Escape, Tab)' },
+          index: { type: 'number', description: 'Optional element index to focus before pressing' },
+        },
+        required: ['key'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'hover',
+      description: 'Hover over an element by index',
+      parameters: {
+        type: 'object',
+        properties: {
+          index: { type: 'number', description: 'Element index to hover' },
+        },
+        required: ['index'],
+      },
+    },
+  },
+]
+
 interface ChatCompletionsResponse {
   choices?: Array<{
     message?: {
       content?: string | null
+      tool_calls?: Array<{
+        id: string
+        type: 'function'
+        function: {
+          name: string
+          arguments: string
+        }
+      }>
     }
     finish_reason?: string | null
   }>
-  // OpenAI returns { error: { message } }; native Ollama errors can be { error: "string" }.
   error?: { message?: string } | string
 }
 
@@ -27,8 +200,7 @@ function extractJSON(text: string): string {
   const candidate = block?.[1]?.trim() ?? trimmed
 
   // Find the FIRST JSON value — either an object `{...}` or an array `[...]` — and
-  // return it via balanced-bracket extraction. Supporting arrays lets the model
-  // emit a batch of actions (e.g. `[{select},{select},{done}]`) in one response.
+  // return it via balanced-bracket extraction.
   let start = -1
   let open = '{'
   let close = '}'
@@ -85,6 +257,49 @@ export function parseAgentActionResponse(raw: string): AgentAction {
   return parseAgentActions(raw)[0]
 }
 
+interface ToolCall {
+  id: string
+  type: 'function'
+  function: {
+    name: string
+    arguments: string
+  }
+}
+
+/**
+ * Convert an OpenAI tool call into an AgentAction.
+ * Preserves reflection fields (evaluation_previous_goal, memory, next_goal)
+ * from the tool call arguments.
+ */
+function toolCallToAction(toolCall: ToolCall): AgentAction {
+  const name = toolCall.function.name
+  let args: Record<string, unknown> = {}
+  try {
+    args = JSON.parse(toolCall.function.arguments)
+  } catch {
+    // If arguments are malformed, treat as empty
+  }
+
+  // Extract reflection fields from args (they're optional in tool definitions)
+  const evaluation_previous_goal = typeof args.evaluation_previous_goal === 'string' ? args.evaluation_previous_goal : undefined
+  const memory = typeof args.memory === 'string' ? args.memory : undefined
+  const next_goal = typeof args.next_goal === 'string' ? args.next_goal : undefined
+
+  // Remove reflection fields from action args
+  const actionArgs: Record<string, unknown> = { ...args }
+  delete actionArgs.evaluation_previous_goal
+  delete actionArgs.memory
+  delete actionArgs.next_goal
+
+  return {
+    action: name as AgentAction['action'],
+    evaluation_previous_goal,
+    memory,
+    next_goal,
+    args: Object.keys(actionArgs).length > 0 ? actionArgs as AgentAction['args'] : undefined,
+  }
+}
+
 const DIRECT_PROVIDER_HOSTS = [
   'api.openai.com',
   'api.anthropic.com',
@@ -130,18 +345,16 @@ export class OpenAIClient implements LLMClient {
     console.log('messages:', messages)
     console.groupEnd()
 
-    // Request body. Sending `max_tokens` and (optionally) a JSON response_format
-    // are the two biggest knobs for cutting generation time on slow servers.
+    // Build request body — use tool calling (replaces response_format / JSON mode)
     const body: Record<string, unknown> = {
       model: this.config.model,
       temperature: this.config.temperature,
       messages,
+      tools: ACTION_TOOLS,
+      tool_choice: 'required',
     }
     if (typeof this.config.maxTokens === 'number') {
       body.max_tokens = this.config.maxTokens
-    }
-    if (this.config.jsonMode) {
-      body.response_format = { type: 'json_object' }
     }
 
     // Optional hard timeout so a stuck inference fails fast instead of hanging.
@@ -185,20 +398,34 @@ export class OpenAIClient implements LLMClient {
     }
 
     const choice = data.choices?.[0]
+    const toolCalls = choice?.message?.tool_calls
     const content = choice?.message?.content
+
     console.group(`%c[PageAgent] LLM response ✓ (${ms}ms)`, 'color:#22c55e;font-weight:bold')
-    console.log('raw:', content)
+    if (toolCalls) {
+      console.log('tool_calls:', JSON.stringify(toolCalls, null, 2))
+    } else {
+      console.log('raw:', content)
+    }
     console.groupEnd()
 
-    if (!content) {
-      throw new Error('LLM did not return message content.')
+    // ── Preferred path: parse tool_calls ──────────────────────────────
+    if (toolCalls && toolCalls.length > 0) {
+      // Handle batching: multiple tool_calls in one response = batch actions
+      return toolCalls
+        .filter((tc) => tc.type === 'function')
+        .map((tc) => toolCallToAction(tc))
     }
 
-    // Truncation guard: when the model hit the token cap the JSON is cut off and
-    // would throw a confusing parse error. Surface an actionable message instead.
+    // ── Fallback: parse JSON from content (for models without tool support) ──
+    if (!content) {
+      throw new Error('LLM did not return message content or tool calls.')
+    }
+
+    // Truncation guard
     if (choice?.finish_reason === 'length') {
-      const modelName = this.config.model;
-      const tokenLimit = this.config.maxTokens ?? 'unlimited';
+      const modelName = this.config.model
+      const tokenLimit = this.config.maxTokens ?? 'unlimited'
       throw new Error(
         `LLM response was truncated (finish_reason: length). ` +
         `Model: "${modelName}", current maxTokens: ${tokenLimit}. ` +

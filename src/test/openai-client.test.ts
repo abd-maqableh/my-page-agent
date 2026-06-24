@@ -123,10 +123,20 @@ describe('OpenAIClient — Ollama-compatible endpoint', () => {
 })
 
 describe('OpenAIClient — performance knobs', () => {
-  it('sends max_tokens and response_format only when configured', async () => {
+  it('sends max_tokens and tools when configured', async () => {
     const fetchMock = vi.fn(async () => {
       return new Response(
-        JSON.stringify({ choices: [{ message: { content: '{"action":"done","args":{"result":"ok"}}' } }] }),
+        JSON.stringify({
+          choices: [{
+            message: {
+              tool_calls: [{
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'done', arguments: '{"result":"ok"}' },
+              }],
+            },
+          }],
+        }),
       )
     })
     globalThis.fetch = fetchMock as typeof fetch
@@ -145,24 +155,65 @@ describe('OpenAIClient — performance knobs', () => {
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     const body = JSON.parse(String(init.body))
     expect(body.max_tokens).toBe(400)
-    expect(body.response_format).toEqual({ type: 'json_object' })
+    expect(body.tools).toBeDefined()
+    expect(body.tool_choice).toBe('required')
+    // Should NOT send response_format when tools are used
+    expect(body.response_format).toBeUndefined()
   })
 
-  it('omits max_tokens and response_format by default', async () => {
+  it('omits max_tokens by default', async () => {
     const fetchMock = vi.fn(async () => {
       return new Response(
-        JSON.stringify({ choices: [{ message: { content: '{"action":"done","args":{"result":"ok"}}' } }] }),
+        JSON.stringify({
+          choices: [{
+            message: {
+              tool_calls: [{
+                id: 'call_1',
+                type: 'function',
+                function: { name: 'done', arguments: '{"result":"ok"}' },
+              }],
+            },
+          }],
+        }),
       )
     })
     globalThis.fetch = fetchMock as typeof fetch
 
-    const client = new OpenAIClient({ baseURL: 'http://localhost:11434/v1', apiKey: 'NA', model: 'llama3.2' })
+    const client = new OpenAIClient({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'llama3.2',
+    })
+
     await client.getNextActions([{ role: 'user', content: 'go' }])
 
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit]
     const body = JSON.parse(String(init.body))
-    expect('max_tokens' in body).toBe(false)
-    expect('response_format' in body).toBe(false)
+    expect(body.max_tokens).toBeUndefined()
+  })
+
+  it('throws on truncated response (finish_reason: length)', async () => {
+    const fetchMock = vi.fn(async () => {
+      return new Response(
+        JSON.stringify({
+          choices: [{
+            message: { content: '{"action":"done"' },
+            finish_reason: 'length',
+          }],
+        }),
+      )
+    })
+    globalThis.fetch = fetchMock as typeof fetch
+
+    const client = new OpenAIClient({
+      baseURL: 'http://localhost:11434/v1',
+      apiKey: 'NA',
+      model: 'llama3.2',
+    })
+
+    await expect(
+      client.getNextActions([{ role: 'user', content: 'go' }]),
+    ).rejects.toThrow(/truncated|length/)
   })
 
   it('throws a clear timeout error when the request aborts', async () => {

@@ -24,6 +24,12 @@ export type AgentActionArgs = {
 
 export interface AgentAction {
   thought?: string
+  /** Reflection: how well did the previous action achieve its goal? */
+  evaluation_previous_goal?: string
+  /** Reflection: key information to remember for future steps */
+  memory?: string
+  /** Reflection: what should be accomplished in the next action */
+  next_goal?: string
   action: AgentActionName
   args?: AgentActionArgs
 }
@@ -173,6 +179,21 @@ export interface AgentConfigBase {
    * is inaccessible. The agent keeps this updated after each navigation.
    */
   currentUrl?: string
+  /**
+   * Full conversation history from the host chat UI (previous user→assistant
+   * exchanges). Injected at the top of every LLM prompt so the model
+   * remembers what was already discussed — enables cross-turn follow-ups
+   * ("now filter by pending" after "show me applications").
+   */
+  conversationHistory?: ChatMessage[]
+  /**
+   * When true, the agent can answer freeform questions about the page
+   * content (e.g. "what does this chart show?", "how many items?")
+   * instead of strictly performing page actions. The prompt includes a
+   * Q&A section that instructs the model to return a `done` with an
+   * explanation when no page interaction is needed.
+   */
+  enableQAMode?: boolean
   /**
    * Optional gate invoked before every action is executed. Return false (or a
    * Promise resolving to false) to abort the run. Useful for blocking

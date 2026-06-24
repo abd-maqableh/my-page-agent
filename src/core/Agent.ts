@@ -8,6 +8,7 @@ import type {
   AgentConfig,
   AgentHistoryEntry,
   AgentRunResult,
+  ChatMessage,
   LLMClient,
   PageDescriptor,
 } from "./types";
@@ -73,6 +74,19 @@ export class Agent {
   private readonly confirmAction?: AgentConfig["confirmAction"];
   private readonly pages?: AgentConfig["pages"];
   private readonly twoPhase: boolean;
+  /** Mutable — the host can update this between calls to `execute()`. */
+  enableQAMode: boolean;
+
+  /** Mutable — the host can update this between calls to `execute()`. */
+  conversationHistory: ChatMessage[];
+
+  /**
+   * When true, `execute()` skips Phase 1 (navigation) even in twoPhase mode
+   * and goes straight to Phase 2 (interaction on the current DOM).
+   * Set this before calling `execute()` for follow-up requests where the
+   * iframe must NOT reload (preserving existing filter state).
+   */
+  forceSinglePhase: boolean;
 
   constructor(config: AgentConfig) {
     this.client = config.llmClient ?? createLLMClient(config);
@@ -87,13 +101,24 @@ export class Agent {
     this.confirmAction = config.confirmAction;
     this.pages = config.pages;
     this.twoPhase = config.twoPhase ?? false;
+    this.enableQAMode = config.enableQAMode ?? false;
+    this.conversationHistory = config.conversationHistory ?? [];
+    this.forceSinglePhase = false;
   }
 
   async execute(task: string): Promise<AgentRunResult> {
     if (!task.trim()) {
       throw new Error("Task is required.");
     }
-    return this.twoPhase && this.pages && this.callbacks?.onPageReady
+    // forceSinglePhase bypasses Phase 1 navigation — the host (ChatPage)
+    // sets this for follow-up requests so the iframe never reloads and
+    // existing filter/scroll state is preserved.
+    const shouldUseTwoPhase =
+      this.twoPhase &&
+      this.pages &&
+      this.callbacks?.onPageReady &&
+      !this.forceSinglePhase;
+    return shouldUseTwoPhase
       ? this.executeTwoPhase(task)
       : this.executeSinglePhase(task);
   }
@@ -133,11 +158,34 @@ export class Agent {
       );
     }
 
+    // Follow-up guard: if the conversation history shows we recently navigated
+    // to this page, treat it as a follow-up filter/action request even when the
+    // task doesn't mention a section name. Without this guard, a second request
+    // like "filter by mining license" runs Phase 1 → the LLM returns navigate →
+    // the iframe reloads → ALL previous filters are lost.
+    let conversationEstablishedStay = false;
+    if (matchedPage && this.conversationHistory.length > 0) {
+      // Scan backwards through conversation history to find the last assistant
+      // message confirming navigation to this page's path.
+      for (let i = this.conversationHistory.length - 1; i >= 0; i--) {
+        const msg = this.conversationHistory[i];
+        if (
+          msg.role === 'assistant' &&
+          msg.content.toLowerCase().includes(matchedPage.path)
+        ) {
+          conversationEstablishedStay = true;
+          break;
+        }
+        // Stop at the last user message before the current exchange — don't
+        // look further back than the previous user turn.
+        if (msg.role === 'user') break;
+      }
+    }
+
     const shouldSkipNavigation =
       matchedPage &&
       !asksForOtherPage &&
-      // If page has sections and task mentions none, route through Phase 1
-      (!matchedPage || taskMentionsCurrentSection);
+      (taskMentionsCurrentSection || conversationEstablishedStay);
 
     if (shouldSkipNavigation) {
       this.callbacks?.onStatus?.(
@@ -159,7 +207,7 @@ export class Agent {
       );
     } else {
       this.callbacks?.onStatus?.("Deciding target page");
-      const navMessages = buildNavigationPrompt(task, this.pages!, currentUrl);
+      const navMessages = buildNavigationPrompt(task, this.pages!, currentUrl, this.conversationHistory);
 
       let navActions: AgentAction[];
       try {
@@ -260,6 +308,7 @@ export class Agent {
     // selection or any other action that causes React to re-render the page.
     const maxSteps = 8;
     let iterStep = 0;
+    let carriedMemory: string | undefined;
 
     while (iterStep < maxSteps) {
       this.callbacks?.onStatus?.("Scanning page");
@@ -271,6 +320,9 @@ export class Agent {
         observation,
         this.pages,
         history,
+        this.conversationHistory,
+        this.enableQAMode,
+        carriedMemory,
       );
 
       let interactActions: AgentAction[];
@@ -296,6 +348,13 @@ export class Agent {
           message: "Model returned no interaction actions.",
         };
       }
+
+      // ── Extract reflection memory for the next iteration ────────────
+      const lastAction = interactActions[interactActions.length - 1];
+      carriedMemory = (lastAction.action !== "done" ? lastAction.memory : undefined) ||
+        // Also scan backward for non-done actions that carried memory
+        interactActions.find((a) => a.action !== "done" && a.memory)?.memory ||
+        carriedMemory;
 
       if (this.confirmAction) {
         for (const action of interactActions) {
@@ -484,7 +543,7 @@ export class Agent {
     const observation = this.pageController.observe();
 
     this.callbacks?.onStatus?.("Asking model");
-    const messages = buildInteractionPrompt(task, observation, this.pages, []);
+    const messages = buildInteractionPrompt(task, observation, this.pages, [], this.conversationHistory, this.enableQAMode);
 
     let actions: AgentAction[];
     try {

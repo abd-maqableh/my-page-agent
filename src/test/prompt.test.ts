@@ -50,31 +50,64 @@ const observation: PageObservation = {
 }
 
 describe('buildPrompt', () => {
-  it('includes minimal action and return-format instructions', () => {
-    const [systemMessage] = buildPrompt('show sent applications', observation)
-
-    expect(systemMessage.content).toContain('You are a browser page agent.')
-    expect(systemMessage.content).toContain('Available actions and REQUIRED args')
-    expect(systemMessage.content).toContain('- click')
-    expect(systemMessage.content).toContain('- done')
-    expect(systemMessage.content).toContain('Return ONLY one JSON object')
-    expect(systemMessage.content).toContain('"actions"')
-    expect(systemMessage.content).toContain('Runtime context (changes every request):')
-    expect(systemMessage.content).toContain('PAGE ELEMENTS')
-    expect(systemMessage.content).toContain('END OF PAGE ELEMENTS')
+  it('returns system + user messages', () => {
+    const messages = buildPrompt('show sent applications', observation)
+    expect(messages).toHaveLength(2)
+    expect(messages[0].role).toBe('system')
+    expect(messages[1].role).toBe('user')
   })
 
-  it('includes DOM elements as JSON with labels and descriptions in system', () => {
+  it('includes agent identity in system prompt', () => {
     const [systemMessage] = buildPrompt('show sent applications', observation)
+    expect(systemMessage.content).toContain('browser page agent')
+    expect(systemMessage.content).toContain('PHASE 2')
+  })
 
-    expect(systemMessage.content).toContain('"label": "Status"')
-    expect(systemMessage.content).toContain('"description": "Filter dropdown.')
-    expect(systemMessage.content).toContain('Options: New Request, Sent, Rejected')
+  it('includes action descriptions in system prompt', () => {
+    const [systemMessage] = buildPrompt('show sent applications', observation)
+    expect(systemMessage.content).toContain('`click')
+    expect(systemMessage.content).toContain('`done')
+    expect(systemMessage.content).toContain('`select')
+    expect(systemMessage.content).toContain('`input')
+  })
+
+  it('includes retry rule in system prompt', () => {
+    const [systemMessage] = buildPrompt('show sent applications', observation)
+    expect(systemMessage.content).toContain('RETRY')
+    expect(systemMessage.content).toContain('completely different')
+  })
+
+  it('includes batching instruction in system prompt', () => {
+    const [systemMessage] = buildPrompt('show sent applications', observation)
+    expect(systemMessage.content).toContain('BATCHING')
+  })
+
+  it('includes DOM elements in user message', () => {
+    const [, userMessage] = buildPrompt('show sent applications', observation)
+    expect(userMessage.content).toContain('PAGE ELEMENTS')
+    expect(userMessage.content).toContain('"label": "Status"')
+    expect(userMessage.content).toContain('New Request')
+  })
+
+  it('includes page title and url in user message', () => {
+    const [, userMessage] = buildPrompt('show sent applications', observation)
+    expect(userMessage.content).toContain('Applications')
+    expect(userMessage.content).toContain('http://localhost:8080/applications')
+  })
+
+  it('includes max index hint in user message', () => {
+    const [, userMessage] = buildPrompt('show sent applications', observation)
+    expect(userMessage.content).toContain('Interactive elements on this page: 1 – 2')
+  })
+
+  it('includes filter dropdown values in user message', () => {
+    const [, userMessage] = buildPrompt('show sent applications', observation)
+    expect(userMessage.content).toContain('Sent')
+    expect(userMessage.content).toContain('Rejected')
   })
 
   it('includes known page paths only when provided', () => {
-    const [withoutPages] = buildPrompt('go to users', observation)
-    const [withPages] = buildPrompt('go to users', observation, {
+    const pages = {
       Users: '/dashboard/user/list',
       Orders: '/dashboard/order',
       Settings: {
@@ -83,70 +116,43 @@ describe('buildPrompt', () => {
           Profile: '/dashboard/settings/profile',
         },
       },
-    })
-
-    expect(withoutPages.content).not.toContain('Known page paths (for navigate):')
-    expect(withPages.content).toContain('Known page paths (for navigate):')
-    expect(withPages.content).toContain('Users')
-    expect(withPages.content).toContain('url: "/dashboard/user/list"')
-    expect(withPages.content).toContain('Profile')
-    expect(withPages.content).toContain('url: "/dashboard/settings/profile"')
+    }
+    const [, userMessage] = buildPrompt('go to users', observation, pages)
+    expect(userMessage.content).toContain('Known page paths')
+    expect(userMessage.content).toContain('Users')
+    expect(userMessage.content).toContain('url: "/dashboard/user/list"')
+    expect(userMessage.content).toContain('Profile')
+    expect(userMessage.content).toContain('url: "/dashboard/settings/profile"')
   })
 
-  describe('new rules (hallucination fixes)', () => {
-    it('includes SECTION RULE', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('SECTION RULE:')
-      expect(systemMessage.content).toContain('scroll landmarks ONLY')
-    })
+  it('includes completed steps when provided', () => {
+    const steps = [
+      {
+        step: 1,
+        observation: '',
+        action: { action: 'navigate' as const, args: { url: '/applications' } },
+        result: { success: true, message: 'Navigated to /applications' },
+      },
+    ]
+    const [, userMessage] = buildPrompt('filter by Sent', observation, undefined, steps)
+    expect(userMessage.content).toContain('Steps already completed')
+    expect(userMessage.content).toContain('navigate')
+    expect(userMessage.content).toContain('Navigated to /applications')
+  })
 
-    it('includes RETRY RULE', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('RETRY RULE:')
-      expect(systemMessage.content).toContain('completely different action or index')
-    })
+  it('includes conversation history when provided', () => {
+    const history = [
+      { role: 'user' as const, content: 'Show me applications' },
+      { role: 'assistant' as const, content: 'Navigated to /applications' },
+    ]
+    const [, userMessage] = buildPrompt('filter by Sent', observation, undefined, [], history)
+    expect(userMessage.content).toContain('CONVERSATION HISTORY')
+    expect(userMessage.content).toContain('Show me applications')
+    expect(userMessage.content).toContain('Navigated to /applications')
+  })
 
-    it('includes DONE RULES A/B/C/D', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('DONE RULE A:')
-      expect(systemMessage.content).toContain('DONE RULE B:')
-      expect(systemMessage.content).toContain('DONE RULE C:')
-      expect(systemMessage.content).toContain('DONE RULE D:')
-    })
-
-    it('includes NAVIGATE STRICT RULE', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('NAVIGATE STRICT RULE:')
-    })
-
-    it('includes DATE FORMAT RULE', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('DATE FORMAT RULE:')
-    })
-
-    it('includes MODAL rules', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('MODAL CLOSE RULE:')
-      expect(systemMessage.content).toContain('MODAL INTERACTION RULE:')
-    })
-
-    it('includes output primer', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('Respond with ONLY the JSON object')
-      expect(systemMessage.content).toContain('No preamble. No explanation. No markdown.')
-    })
-
-    it('includes BATCHING section with array example', () => {
-      const [systemMessage] = buildPrompt('show sent applications', observation)
-      expect(systemMessage.content).toContain('BATCHING:')
-      expect(systemMessage.content).toContain('"action":"select"')
-      expect(systemMessage.content).toContain('"action":"done"')
-    })
-
-    it('includes max index hint in user message', () => {
-      const [, userMessage] = buildPrompt('show sent applications', observation)
-      expect(userMessage.content).toContain('interactive element(s) on this page')
-      expect(userMessage.content).toContain('Valid indexes: 1 –')
-    })
+  it('includes QA mode hints when enabled', () => {
+    const [, userMessage] = buildPrompt('what does this show?', observation, undefined, [], [], true)
+    expect(userMessage.content).toContain('Q&A MODE')
   })
 })

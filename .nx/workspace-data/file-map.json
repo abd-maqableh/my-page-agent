@@ -200,6 +200,10 @@
           "hash": "3601010488387853507"
         },
         {
+          "file": "files.zip",
+          "hash": "5186316477097779870"
+        },
+        {
           "file": "index.html",
           "hash": "5500999209420211639"
         },
@@ -229,11 +233,19 @@
         },
         {
           "file": "src/core/Agent.ts",
-          "hash": "6457475158687926569"
+          "hash": "7515228923782998339"
         },
         {
           "file": "src/core/prompt.ts",
-          "hash": "8912957897942516016"
+          "hash": "4936637202170123188"
+        },
+        {
+          "file": "src/core/prompts/interaction_prompt.md",
+          "hash": "9812445575364889033"
+        },
+        {
+          "file": "src/core/prompts/navigation_prompt.md",
+          "hash": "4801803774291912659"
         },
         {
           "file": "src/core/text.ts",
@@ -241,19 +253,19 @@
         },
         {
           "file": "src/core/tools.ts",
-          "hash": "16671572718832875675"
+          "hash": "6883428679744132665"
         },
         {
           "file": "src/core/types.ts",
-          "hash": "4665264376321474539"
+          "hash": "15549348229211621199"
         },
         {
           "file": "src/index.ts",
-          "hash": "17321903042483971600"
+          "hash": "3859272476389840847"
         },
         {
           "file": "src/llm/OpenAIClient.ts",
-          "hash": "6073861248710487617"
+          "hash": "3735526166626769393"
         },
         {
           "file": "src/llm/createLLMClient.ts",
@@ -288,14 +300,14 @@
         },
         {
           "file": "src/test/openai-client.test.ts",
-          "hash": "10503583410606851126",
+          "hash": "122579599991677243",
           "deps": [
             "npm:vitest"
           ]
         },
         {
           "file": "src/test/prompt.test.ts",
-          "hash": "18100092467009924451",
+          "hash": "13880515237048226334",
           "deps": [
             "npm:vitest"
           ]
@@ -312,6 +324,10 @@
           "hash": "14197721366034977711"
         },
         {
+          "file": "src/vite-env.d.ts",
+          "hash": "8177080614338592903"
+        },
+        {
           "file": "tsconfig.base.json",
           "hash": "2989873150160898660"
         },
@@ -321,7 +337,7 @@
         },
         {
           "file": "tsconfig.lib.json",
-          "hash": "144550436377774759"
+          "hash": "631982170932916507"
         },
         {
           "file": "vite-env.d.ts",
