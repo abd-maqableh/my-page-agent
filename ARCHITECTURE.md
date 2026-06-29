@@ -323,27 +323,44 @@ stateDiagram-v2
 
 ## 5. LLM Response Processing Pipeline
 
+The agent uses **OpenAI tool calling** (`tools` + `tool_choice: 'required'`) as the primary path, with a **content-based JSON fallback** for models that don't support tool calls.
+
 ```mermaid
 flowchart LR
-    RAW["Raw LLM text<br/>(may have markdown fences,<br/>extra prose)"]
-    FENCE["Strip markdown<br/>code fences"]
-    EXTRACT["extractJSON()<br/>balanced-bracket<br/>cursor walk<br/>(supports { } and [ ])"]
-    PARSE["JSON.parse()"]
-    NORMALIZE["normalizeActions()<br/>• single action → [action]<br/>• {actions:[...]} → AgentAction[]<br/>• [...] → AgentAction[]<br/>• validates each action<br/>• hoists flat args<br/>• extracts index from thought"]
-    ACTIONS["AgentAction[]<br/>[{thought, action, args}, …]"]
+    MSG["ChatMessage[]"]
+    TOOLS["ACTION_TOOLS<br/>(10 tool definitions)"]
+    LLM["LLM API<br/>/chat/completions"]
 
-    ERR1(["throw: no JSON found"])
-    ERR2(["throw: invalid JSON"])
-    ERR3(["throw: no valid actions"])
+    TOOL_CALLS{"tool_calls<br/>in response?"}
+    PARSE_TC["toolCallToAction()<br/>• function.name → action<br/>• function.arguments → args<br/>• extracts reflection fields"]
+    ACTIONS["AgentAction[]<br/>[{evaluation_previous_goal, memory,<br/>next_goal, action, args}, …]"]
 
-    RAW --> FENCE --> EXTRACT
-    EXTRACT -->|"no { or [ found"| ERR1
-    EXTRACT -->|"balanced JSON"| PARSE
-    PARSE -->|"SyntaxError"| ERR2
-    PARSE -->|"object or array"| NORMALIZE
-    NORMALIZE -->|"0 actions"| ERR3
-    NORMALIZE -->|"valid"| ACTIONS
+    FALLBACK_BRANCH["Fallback path<br/>(models w/o tool support)"]
+    RAW["Raw LLM text"]
+    EXTRACT["extractJSON()<br/>balanced-bracket cursor walk"]
+    PARSE["JSON.parse()
+→ normalizeActions()
+→ AgentAction[]"]
+
+    MSG --> TOOLS
+    TOOLS --> LLM
+    LLM --> TOOL_CALLS
+    TOOL_CALLS -->|"yes"| PARSE_TC
+    PARSE_TC --> ACTIONS
+    TOOL_CALLS -->|"no"| FALLBACK_BRANCH
+    FALLBACK_BRANCH --> RAW --> EXTRACT --> PARSE --> ACTIONS
 ```
+
+**Preferred path** — tool calling:
+- 10 tool definitions sent alongside messages (`click`, `input`, `select`, `scroll`, `wait`, `navigate`, `done`, `clear`, `press_key`, `hover`)
+- Each tool has optional reflection parameters: `evaluation_previous_goal`, `memory`, `next_goal`
+- `tool_choice: 'required'` forces structured output (no `response_format` needed)
+- Multiple `tool_calls` in one response = batch actions (no `extractJSON`/`normalizeActions` needed)
+
+**Fallback path** — JSON-in-content (backward compat):
+- `extractJSON()` — strips markdown fences, walks characters with brace/bracket-depth counter
+- `normalizeActions()` — normalizes single action, `{actions:[...]}`, or bare array into `AgentAction[]`
+- Reflection fields are preserved through normalization
 
 ---
 
@@ -412,7 +429,15 @@ flowchart LR
 
 ---
 
-## 8. Prompt Architecture (Split)
+## 8. Prompt Architecture
+
+Prompts are split into **static** (cacheable) and **dynamic** (per-step) parts stored in separate files:
+
+```
+src/core/prompts/
+├── navigation_prompt.md    ← imported via ?raw
+└── interaction_prompt.md   ← imported via ?raw
+```
 
 ```mermaid
 flowchart TD
@@ -420,27 +445,50 @@ flowchart TD
     PAGES["Pages Config<br/>(paths + sections + subPages)"]
     OBS["PageObservation<br/>(url, title, elements, elementsText)"]
     HISTORY["Completed Steps<br/>(AgentHistoryEntry[])"]
+    MEMORY["Carried Memory<br/>(reflection.memory from<br/>previous step)"]
 
-    NAV["buildNavigationPrompt<br/>PHASE 1 — Navigation only<br/>• No DOM elements<br/>• Only pages config<br/>• Returns: navigate + done"]
-    INTERACT["buildInteractionPrompt<br/>PHASE 2 — Interaction<br/>• Full DOM scan<br/>• Filter map<br/>• Completed steps<br/>• Returns: action batch + done"]
+    NAV_MD["navigation_prompt.md<br/>(static, cacheable)"]
+    INT_MD["interaction_prompt.md<br/>(static, cacheable)"]
+
+    NAV["buildNavigationPrompt()"]
+    INTERACT["buildInteractionPrompt()"]
 
     FILTER["buildFilterMap<br/>value → dropdown index<br/>lookup table"]
 
-    TASK --> NAV
-    TASK --> INTERACT
-    PAGES --> NAV
-    PAGES --> INTERACT
-    OBS --> INTERACT
-    OBS --> FILTER
-    HISTORY --> INTERACT
-    FILTER --> INTERACT
+    subgraph SYSTEM_MSG ["System message (cacheable)"]
+        NAV_SYS["role: system<br/>← NAVIGATION_PROMPT"]
+        INT_SYS["role: system<br/>← INTERACTION_PROMPT<br/>• Reflection instructions<br/>• Condensed rules (6 rules)<br/>• Action descriptions<br/>• Output format"]
+    end
 
-    NAV -->|"ChatMessage[]"| LLM1["LLM (Phase 1)"]
-    INTERACT -->|"ChatMessage[]"| LLM2["LLM (Phase 2)"]
+    subgraph USER_MSG ["User message (dynamic per step)"]
+        NAV_USER["role: user<br/>• Current URL context<br/>• Conversation history<br/>• Page paths list"]
+        INT_USER["role: user<br/>• Task + page info<br/>• PAGE ELEMENTS (DOM JSON)<br/>• Filter map<br/>• Completed steps<br/>• Carried memory<br/>• Q&A mode block"]
+    end
+
+    TASK --> NAV_USER
+    TASK --> INT_USER
+    PAGES --> NAV_USER
+    PAGES --> INT_USER
+    OBS --> INT_USER
+    OBS --> FILTER --> INT_USER
+    HISTORY --> INT_USER
+    MEMORY --> INT_USER
+
+    NAV_MD --> NAV_SYS
+    INT_MD --> INT_SYS
+
+    NAV_SYS --> NAV_USER --> LLM1["LLM (Phase 1)"]
+    INT_SYS --> INT_USER --> LLM2["LLM (Phase 2)"]
 ```
 
-The prompt system is now **split into two functions**:
-- **`buildNavigationPrompt`** — Phase 1 only. Minimal prompt with no DOM elements; the LLM only decides which page to `navigate` to.
-- **`buildInteractionPrompt`** — Phase 2 (and single-phase). Full DOM scan with filter map, completed steps, and all interaction rules.
-- **`buildFilterMap`** — Helper that builds a "value → dropdown index" lookup table so the LLM doesn't need to parse JSON to find which dropdown has which option.
-- `buildPrompt` is kept as a **deprecated alias** for `buildInteractionPrompt` for backward compatibility.
+### Key design decisions:
+
+1. **Static markdown files** — `navigation_prompt.md` and `interaction_prompt.md` are plain Markdown imported via Vite's `?raw` loader. Editable without touching TypeScript.
+
+2. **Cacheable system messages** — The static prompts go into `role: system`. Dynamic content (DOM, history, memory) goes into `role: user`. This enables **prompt caching** on providers that support it (OpenAI, Anthropic), since the system message is identical across steps.
+
+3. **Reflection-before-action** — The `INTERACTION_PROMPT` instructs the model to output `evaluation_previous_goal`, `memory`, and `next_goal` before each action. The `memory` field is extracted from each response and carried forward to the next iteration via `Agent.ts`.
+
+4. **Condensed rules** — The prompt was reduced from ~4,500+ to ~1,500 tokens by removing verbose sections (modal rules, date format rules, done rules A/B/C/D, duplicate output instructions).
+
+5. **Tool calling replaces `response_format`** — The output format section is no longer needed for tool-calling models. The tool definitions (`ACTION_TOOLS` in `OpenAIClient.ts`) serve as the output contract.

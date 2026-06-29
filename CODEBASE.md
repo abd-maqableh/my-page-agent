@@ -106,9 +106,10 @@ Two-phase execution:
 
 **Phase 2 — Interaction loop (max 8 batches):**
 1. **Observe** — `pageController.observe()` scans the live DOM.
-2. **Build prompt** — `buildInteractionPrompt(task, observation, pages, history)`.
-3. **Ask LLM** — `client.getNextActions(messages)` returns `AgentAction[]`.
-4. **Confirm** — runs `confirmAction` gate on each action if configured.
+2. **Build prompt** — `buildInteractionPrompt(task, observation, pages, history, conversationHistory, enableQAMode, carriedMemory)`.
+3. **Ask LLM** — `client.getNextActions(messages)` returns `AgentAction[]` via tool calls.
+4. **Extract memory** — the last action's `memory` field is saved for the next iteration.
+5. **Confirm** — runs `confirmAction` gate on each action if configured.
 5. **Execute batch** — `pageController.executeActionQueue(safeActions)` — strips `navigate` actions, stops at first `done`.
 6. **Record history** — pushes entries and fires `onStep`.
 7. **Error check** — if batch had an error, returns `{ status: 'error' }`.
@@ -132,25 +133,27 @@ Helper that appends an `AgentHistoryEntry` to the history array and fires `callb
 
 ### `src/core/prompt.ts`
 
-Assembles the structured `ChatMessage[]` payload sent to the LLM. Now split into two functions for the two-phase flow.
+Assembles the structured `ChatMessage[]` payload sent to the LLM. Static prompts are imported from Markdown files via `?raw`.
+
+**Imports:**
+```ts
+import NAVIGATION_PROMPT from './prompts/navigation_prompt.md?raw'
+import INTERACTION_PROMPT from './prompts/interaction_prompt.md?raw'
+```
 
 ---
 
-**`buildNavigationPrompt(task, pages, currentUrl?): ChatMessage[]`**  
-Phase 1 prompt. Minimal — no DOM elements. The LLM only decides which page to navigate to:
-- Includes current URL context (so the LLM can decide to stay).
-- Lists all known pages with their paths and declared sections.
-- Returns `[system, user]` messages. The system message instructs: return exactly one `navigate` action followed by `done`.
+**`buildNavigationPrompt(task, pages, currentUrl?, conversationHistory?): ChatMessage[]`**  
+Phase 1 prompt. Returns `[system, user]` where:
+- **System** — `NAVIGATION_PROMPT` (static, cacheable): instructs the LLM to return one `navigate` + `done`
+- **User** — dynamic: current URL context, conversation history, known page paths
 
 ---
 
-**`buildInteractionPrompt(task, observation, pages?, completedSteps?): ChatMessage[]`**  
-Phase 2 (and single-phase) prompt. Full DOM scan with:
-- Current page URL, title, and element JSON.
-- **Filter map** — `buildFilterMap(elements)` creates a "value → dropdown index" lookup table.
-- Known page paths (if `pages` provided).
-- **Completed steps** — what the agent already did, so the LLM doesn't repeat.
-- Full system rules: FILTER-FIRST RULE, SECTION SCROLLING rules, available actions with required args, HOW TO PICK THE RIGHT ELEMENT heuristics, BATCH DONE RULE, iterative execution notes.
+**`buildInteractionPrompt(task, observation, pages?, completedSteps?, conversationHistory?, enableQAMode?, carriedMemory?): ChatMessage[]`**  
+Phase 2 prompt. Returns `[system, user]` where:
+- **System** — `INTERACTION_PROMPT` (static, cacheable): reflection instructions + 6 condensed rules + action descriptions
+- **User** — dynamic: page info, PAGE ELEMENTS (JSON), filter map, completed steps, conversation history, carried memory, Q&A mode block
 
 ---
 
@@ -160,11 +163,33 @@ Builds a plain-text lookup table from combobox elements: `"Value" → index N (l
 ---
 
 **`formatPagePaths(pages, indent?): string`**  
-Recursively flattens the `pages` map into aligned `label → url` lines. When a page declares `sections`, appends `sections: "A", "B", "C"`. Sub-pages are rendered indented with a `↳` marker.
+Recursively flattens the `pages` map into aligned `label → url` lines with inline section hints and `↳` sub-page markers.
 
 ---
 
 **`buildPrompt`** — deprecated alias for `buildInteractionPrompt`, kept for backward compatibility.
+
+---
+
+### Prompt files
+
+```
+src/core/prompts/
+├── navigation_prompt.md   ← static Phase 1 system prompt
+└── interaction_prompt.md  ← static Phase 2 system prompt
+```
+
+---
+
+### Key changes from the original design:
+
+| Change | Benefit |
+|---|---|
+| Static prompts extracted to `.md` files | Editable without touching TypeScript; separate git history for prompt changes |
+| Split into `[system]` + `[user]` messages | Enables prompt caching on supported providers |
+| Reflection instructions | Model outputs `evaluation_previous_goal`, `memory`, `next_goal` before actions |
+| Condensed from ~4,500 to ~1,500 tokens | ~66% reduction in system prompt size |
+| Removed modal, date, done-rules boilerplate | ~200 lines of instructions no longer needed |
 
 ---
 
@@ -186,6 +211,7 @@ Accepts an `unknown` value (the parsed JSON from the LLM) and returns a clean `A
 - **Nested args** — standard `{"action":"click","args":{"index":3}}`.
 - **Flat args** — some small models return `{"action":"click","index":3}` without wrapping in `args`.
 - **Index from thought** — last resort: parses the `thought` string for patterns like `[5]` or `element 5`.
+- **Reflection preservation** — extracts `evaluation_previous_goal`, `memory`, `next_goal` from the raw LLM output and includes them in the returned `AgentAction`.
 
 ---
 
@@ -242,7 +268,7 @@ All shared TypeScript interfaces and type aliases.
 |---|---|
 | `AgentActionName` | Union of 10 valid action strings: `click`, `input`, `select`, `scroll`, `wait`, `navigate`, `clear`, `press_key`, `hover`, `done`. |
 | `AgentActionArgs` | Optional arguments bag: `index`, `text`, `value`, `direction`, `amount`, `timeoutMs`, `result`, `url`, `key`. |
-| `AgentAction` | `{ thought?, action, args? }` — the JSON object the LLM emits per action. |
+| `AgentAction` | `{ thought?, evaluation_previous_goal?, memory?, next_goal?, action, args? }` — the JSON object the LLM emits per action. Now includes reflection fields. |
 | `PageElementSummary` | Snapshot of one DOM element: `index`, `tag`, `role`, `type`, `label`, `description`, `kind` (`'interactive'` or `'section'`). |
 | `PageObservation` | Current page state: `url`, `title`, `elements[]`, `elementsText` (JSON-serialized element array). |
 | `ActionExecutionResult` | `{ success, message, done? }` — result of executing one action. |
@@ -252,8 +278,8 @@ All shared TypeScript interfaces and type aliases.
 | `AgentCallbacks` | `{ onStatus?, onStep?, onPageReady? }` — lifecycle hooks. `onPageReady` is for two-phase flow. |
 | `AgentRunResult` | Final outcome: `{ status: 'done' \| 'error' \| 'max_steps', history, message }`. |
 | `LLMClient` | Interface: `getNextActions(messages): Promise<AgentAction[]>` — returns a batch of actions. |
-| `LLMConfig` | `baseURL`, `apiKey`, `model`, `temperature?`, `maxTokens?`, `jsonMode?`, `requestTimeoutMs?`, `allowDirectProvider?` — universal config for any OpenAI-compatible endpoint. |
-| `AgentConfigBase` | `llmClient?`, `maxSteps?`, `callbacks?`, `twoPhase?`, `currentUrl?`, `confirmAction?`, `targetFrame?`, `pages?`. |
+| `LLMConfig` | `baseURL`, `apiKey`, `model`, `temperature?`, `maxTokens?`, `requestTimeoutMs?`, `allowDirectProvider?` — universal config for any OpenAI-compatible endpoint. `jsonMode` is deprecated (replaced by tool calling). |
+| `AgentConfigBase` | `llmClient?`, `maxSteps?`, `callbacks?`, `twoPhase?`, `currentUrl?`, `enableQAMode?`, `confirmAction?`, `targetFrame?`, `pages?`, `conversationHistory?`. |
 | `PageDescriptor` | `{ path, sections?: string[], subPages?: Record<string, string \| PageDescriptor> }` — rich page description. |
 | `AgentConfig` | `LLMConfig & AgentConfigBase` — the single config object consumers pass. |
 | `ChatMessage` | `{ role: 'system' \| 'user' \| 'assistant', content: string }`. |
@@ -271,27 +297,30 @@ Factory. Always returns `new OpenAIClient(config)`. Any OpenAI-compatible endpoi
 
 ### `src/llm/OpenAIClient.ts`
 
-Universal client for any OpenAI-compatible HTTP API.
+Universal client for any OpenAI-compatible HTTP API. Uses **tool calling** as the primary response format, with a content-based JSON fallback.
 
 **`assertSafeBaseURL(baseURL, allowDirectProvider)`**  
 Security guard. Parses the hostname and refuses if it matches a known public provider domain (e.g. `api.openai.com`) unless `allowDirectProvider: true` is explicitly set.
 
+**`ACTION_TOOLS`** — Array of 10 tool definitions (`click`, `input`, `select`, `scroll`, `wait`, `navigate`, `done`, `clear`, `press_key`, `hover`). Each tool includes optional reflection parameters (`evaluation_previous_goal`, `memory`, `next_goal`) alongside the required action-specific parameters.
+
+**`toolCallToAction(toolCall): AgentAction`**  
+Converts an OpenAI `tool_calls` entry into an `AgentAction`. Extracts the function name as `action`, parses `function.arguments` as `args`, and preserves optional reflection fields.
+
 **`extractJSON(text): string`**  
-Strips markdown code fences. Then walks the string character-by-character maintaining a brace/bracket-depth counter and string/escape state to extract the first complete, balanced `{...}` or `[...]` JSON value.
+Strips markdown code fences. Then walks the string character-by-character maintaining a brace/bracket-depth counter and string/escape state to extract the first complete, balanced `{...}` or `[...]` JSON value. Used only by the content fallback path.
 
 **`parseAgentActions(raw): AgentAction[]`**  
-Calls `extractJSON` → `JSON.parse` → `normalizeActions`. Returns one or more actions (supports batched arrays).
-
-**`parseAgentActionResponse(raw): AgentAction`**  
-Backward-compat: returns only the first action from `parseAgentActions`.
+Calls `extractJSON` → `JSON.parse` → `normalizeActions`. Returns one or more actions (supports batched arrays). Used only by the content fallback path.
 
 **`class OpenAIClient`**  
 `getNextActions(messages)` — POSTs to `{baseURL}/chat/completions` with:
 - `model`, `temperature`, `messages`
+- `tools: ACTION_TOOLS` and `tool_choice: 'required'` (replaces `response_format`)
 - `max_tokens` (if configured — caps generation length)
-- `response_format: { type: 'json_object' }` (if `jsonMode: true` — ensures valid JSON output on compatible servers)
 - `AbortController` timeout (if `requestTimeoutMs` configured)
-- Logs request/response timing to console with color-coded groups.
+- Logs request/response timing to console with color-coded groups
+- Parses `tool_calls` from response first; falls back to content-based JSON parsing when `tool_calls` is absent
 
 ---
 

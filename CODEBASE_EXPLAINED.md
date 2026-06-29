@@ -130,6 +130,12 @@ export type AgentActionArgs = {
 ```ts
 export interface AgentAction {
   thought?: string
+  /** Reflection: how well did the previous action achieve its goal? */
+  evaluation_previous_goal?: string
+  /** Reflection: key information to remember for future steps */
+  memory?: string
+  /** Reflection: what should be accomplished in the next action */
+  next_goal?: string
   action: AgentActionName
   args?: AgentActionArgs
 }
@@ -137,6 +143,9 @@ export interface AgentAction {
 
 - **What:** The exact shape of the JSON object the LLM is expected to return.
 - **`thought`** – An optional reasoning string (the LLM "thinks out loud"). Helps with debugging but is not required.
+- **`evaluation_previous_goal`** – Reflection: did the last action succeed or fail?
+- **`memory`** – Reflection: key facts to carry forward to the next step (values selected, items found, page state).
+- **`next_goal`** – Reflection: what the next action should accomplish and why.
 - **`action`** – The action verb (must be one of `AgentActionName`).
 - **`args`** – The action's arguments.
 
@@ -296,7 +305,7 @@ export interface LLMConfig {
   temperature?: number
   /** Cap on generated tokens per call. Low cap (256–800) prevents slow, runaway generation. */
   maxTokens?: number
-  /** When true, request response_format: { type: 'json_object' } for structured output. */
+  /** @deprecated Replaced by tool calling (sent always). Kept for backward compat. */
   jsonMode?: boolean
   /** Abort a single request after this many ms via AbortController. */
   requestTimeoutMs?: number
@@ -314,7 +323,7 @@ export interface LLMConfig {
 - **`model`** – Model identifier (e.g. `"gpt-4o"`, `"llama3.2"`, `"qwen3:14b"`).
 - **`temperature`** – Randomness of responses (0 = deterministic).
 - **`maxTokens`** – Caps `max_tokens` in the API request. The agent only needs small JSON actions; a low cap prevents runaway generation on verbose models.
-- **`jsonMode`** – Requests `response_format: { type: 'json_object' }` so compatible servers (vLLM, SGLang, OpenAI) return ONLY valid JSON — this also suppresses long prose/think-traces.
+- **`jsonMode`** – Deprecated. The agent now uses tool calling (`tools` + `tool_choice: 'required'`) instead of `response_format`. Kept for backward compatibility.
 - **`requestTimeoutMs`** – Aborts stuck inferences via `AbortController` so they fail fast instead of hanging.
 - **`allowDirectProvider`** – Security opt-in; see `OpenAIClient.ts` for details.
 
@@ -470,8 +479,19 @@ export function normalizeAction(input: unknown): AgentAction {
 ```ts
   const args = Object.keys(mergedArgs).length > 0 ? (mergedArgs as AgentAction['args']) : undefined
 
+  // --- Preserve reflection fields ---
+  const reflectionFields = ['evaluation_previous_goal', 'memory', 'next_goal'] as const
+  const reflection: Partial<Pick<AgentAction, (typeof reflectionFields)[number]>> = {}
+  for (const field of reflectionFields) {
+    const val = raw[field]
+    if (typeof val === 'string') {
+      reflection[field] = val
+    }
+  }
+
   return {
     thought: typeof raw.thought === 'string' ? raw.thought : undefined,
+    ...reflection,
     action: raw.action as AgentActionName,
     args,
   }
@@ -479,6 +499,7 @@ export function normalizeAction(input: unknown): AgentAction {
 ```
 
 - Returns a clean, typed `AgentAction` object. `args` is `undefined` (not `{}`) when empty — consistent with the type definition.
+- **Reflection preservation** — `evaluation_previous_goal`, `memory`, and `next_goal` are extracted from the raw LLM output and included in the returned action. This enables cross-step memory carry-forward in `Agent.ts`.
 
 ---
 
@@ -514,15 +535,38 @@ export function normalizeActions(input: unknown): AgentAction[] {
 
 ## 5. `src/core/prompt.ts` — LLM Prompt Builder
 
-This file is responsible for constructing the exact messages sent to the LLM. The prompt system is now **split into two functions** to support the two-phase execution flow.
+This file is responsible for constructing the exact messages sent to the LLM. Static prompts are imported from Markdown files via Vite's `?raw` loader:
 
-- **`buildNavigationPrompt(task, pages, currentUrl?)`** — Phase 1 only. Minimal prompt with NO DOM elements. The LLM only decides which page to `navigate` to. Lists all known pages with their paths and declared sections.
-- **`buildInteractionPrompt(task, observation, pages?, completedSteps?)`** — Phase 2 (and single-phase). Full DOM scan with filter map, completed steps, and all interaction rules. This is the main prompt for all DOM interactions.
+```ts
+import NAVIGATION_PROMPT from './prompts/navigation_prompt.md?raw'
+import INTERACTION_PROMPT from './prompts/interaction_prompt.md?raw'
+```
+
+The prompt system is **split into two functions**, each returning `[system, user]` messages:
+
+- **`buildNavigationPrompt(task, pages, currentUrl?, conversationHistory?)`** — Phase 1 only.
+  - **System**: `NAVIGATION_PROMPT` (static, cacheable) — instructs the LLM to return one `navigate` + `done`
+  - **User**: dynamic — current URL context, conversation history, known page paths
+
+- **`buildInteractionPrompt(task, observation, pages?, completedSteps?, conversationHistory?, enableQAMode?, carriedMemory?)`** — Phase 2 (and single-phase).
+  - **System**: `INTERACTION_PROMPT` (static, cacheable) — reflection instructions + 6 condensed rules + action descriptions
+  - **User**: dynamic — page info, PAGE ELEMENTS (JSON), filter map, completed steps, conversation history, carried memory, Q&A mode block
+
 - **`buildFilterMap(elements)`** — Helper that builds a "value → dropdown index" lookup table from scanned combobox elements, so the LLM doesn't need to parse JSON to find which dropdown has which option.
+
 - **`formatPagePaths(pages, indent?)`** — Recursively flattens the `pages` map into aligned `label → url` lines with inline section hints.
+
 - **`buildPrompt`** — **Deprecated** alias for `buildInteractionPrompt`, kept for backward compatibility.
 
-The original single-prompt design (`buildPrompt`) is still available but the split design means Phase 1 never wastes tokens on DOM elements the LLM can't yet see, and Phase 2 benefits from a focused interaction-only system message.
+### Key changes from the original design:
+
+| Change | Benefit |
+|---|---|
+| Static prompts in `.md` files | Editable without touching TypeScript; separate git history |
+| Split into `[system]` + `[user]` messages | Enables prompt caching on supported providers |
+| Reflection instructions | Model outputs `evaluation_previous_goal`, `memory`, `next_goal` before actions |
+| Condensed from ~4,500 to ~1,500 tokens | ~66% reduction in system prompt size |
+| `carriedMemory` parameter | Memory persists across iterations, reducing redundant analysis |
 
 ```ts
 import type { AgentHistoryEntry, ChatMessage, PageDescriptor, PageObservation } from './types'
@@ -961,59 +1005,81 @@ export function createLLMClient(config: LLMConfig): LLMClient {
 
 ## 8. `src/llm/OpenAIClient.ts` — Universal LLM Client
 
-This file handles communication with **any** OpenAI-compatible REST API. The main method is now `getNextActions` (returns `AgentAction[]` for batching), and the config supports `maxTokens`, `jsonMode`, and `requestTimeoutMs`.
+This file handles communication with **any** OpenAI-compatible REST API. Now uses **OpenAI tool calling** (`tools` + `tool_choice: 'required'`) as the primary response format, with a JSON-in-content fallback for models without tool support.
+
+### Tool definitions
+
+The client defines 10 action tools, each with typed parameters:
+
+| Tool | Parameters | Required |
+|---|---|---|
+| `click` | `index`, `evaluation_previous_goal?`, `memory?`, `next_goal?` | `index` |
+| `input` | `index`, `text`, `evaluation_previous_goal?`, `memory?`, `next_goal?` | `index`, `text` |
+| `select` | `index`, `value`, `evaluation_previous_goal?`, `memory?`, `next_goal?` | `index`, `value` |
+| `scroll` | `index?`, `direction?`, `amount?` | — |
+| `wait` | `timeoutMs` | `timeoutMs` |
+| `navigate` | `url` | `url` |
+| `done` | `result` | `result` |
+| `clear` | `index` | `index` |
+| `press_key` | `key`, `index?` | `key` |
+| `hover` | `index` | `index` |
+
+Each tool's reflection parameters (`evaluation_previous_goal`, `memory`, `next_goal`) are optional — the model can include them or not. When present, they're preserved through `toolCallToAction()` into the `AgentAction`.
+
+### Request flow
+
+```ts
+const body = {
+  model: this.config.model,
+  temperature: this.config.temperature,
+  messages,
+  tools: ACTION_TOOLS,
+  tool_choice: 'required',  // forces structured output
+}
+if (typeof this.config.maxTokens === 'number') {
+  body.max_tokens = this.config.maxTokens
+}
+```
+
+The `tools` array replaces the old `response_format: { type: 'json_object' }`. Multiple `tool_calls` in one response = batch actions.
+
+### Response parsing
+
+```
+tool_calls present?  ──yes──→  toolCallToAction()  →  AgentAction[]
+      │
+      no
+      ↓
+  extractJSON() → JSON.parse() → normalizeActions() → AgentAction[]  (fallback)
+```
+
+**`toolCallToAction(toolCall)`** — Converts an OpenAI `tool_calls` entry into an `AgentAction`:
+- `function.name` → `action` (e.g. `"click"`, `"select"`)
+- `function.arguments` → `args` (parsed JSON)
+- Extracts `evaluation_previous_goal`, `memory`, `next_goal` from args (deleting them from action args)
+
+### Response interface
 
 ```ts
 interface ChatCompletionsResponse {
   choices?: Array<{
     message?: {
       content?: string | null
+      tool_calls?: Array<{
+        id: string
+        type: 'function'
+        function: { name: string; arguments: string }
+      }>
     }
     finish_reason?: string | null
   }>
-  // OpenAI returns { error: { message } }; native Ollama errors can be { error: "string" }.
   error?: { message?: string } | string
 }
 ```
 
-- **What:** A TypeScript interface for the shape of the API response.
-- **`finish_reason`** – Added to detect `'length'` (truncation) and surface an actionable error instead of a confusing JSON parse failure.
+- **`tool_calls`** — The primary response path. Each entry is a structured tool invocation from the model.
+- **`finish_reason`** – Detects `'length'` (truncation) and surfaces an actionable error.
 - **`error`** – Can be either an OpenAI-style object `{ message: "..." }` or a bare string (Ollama). The `readErrorMessage` helper handles both.
-
----
-
-```ts
-function extractJSON(text: string): string {
-  // ... finds the FIRST JSON value — either { } or [ ] — and returns it
-  // via balanced-bracket extraction. Supporting arrays lets the model emit
-  // a batch of actions (e.g. [{select},{select},{done}]) in one response.
-```
-
-- **What:** Now supports extracting both `{...}` objects AND `[...]` arrays. Walks the string maintaining brace/bracket-depth to find the first complete JSON value.
-- **Why:** The model can now return a bare array like `[{"action":"select","args":...},{"action":"done",...}]` directly, which our `normalizeActions` handles.
-
----
-
-```ts
-export function parseAgentActions(raw: string): AgentAction[] {
-  let payload: unknown
-  try {
-    payload = JSON.parse(extractJSON(raw))
-  } catch (error) {
-    throw new Error(`Failed to parse LLM JSON response: ...`)
-  }
-  const actions = normalizeActions(payload)
-  if (actions.length === 0) {
-    throw new Error('LLM response contained no valid action.')
-  }
-  return actions
-}
-```
-
-- **What:** Replaces `parseAgentActionResponse`. Parses the LLM response into **one or more** actions (supports batched arrays).
-- **`normalizeActions(payload)`** – Handles single action objects, `{actions:[...]}` wrappers, and bare arrays.
-
----
 
 ```ts
 export function parseAgentActionResponse(raw: string): AgentAction {

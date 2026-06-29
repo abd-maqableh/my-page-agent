@@ -8,21 +8,23 @@ A **Page Agent–style** TypeScript library that runs in the browser, observes i
 
 - Scans the current page for interactive elements (buttons, links, inputs, textareas, selects, ARIA roles, clickable/tabbable elements)
 - Builds a text observation with stable numeric indexes for the current step
-- Sends task + page observation + history to any OpenAI-compatible chat completions endpoint
-- Expects JSON action output from the LLM
+- Sends task + page observation + history to any OpenAI-compatible chat completions endpoint — uses **OpenAI tool calling** (`tools` + `tool_choice: 'required'`) for structured output, with a JSON-in-content fallback
 - Executes DOM actions and loops
+- Supports **reflection-before-action**: model outputs `evaluation_previous_goal`, `memory`, and `next_goal` before each action, reducing wasted retry steps
+- Static system prompts extracted to Markdown files for easy editing; split into cacheable `[system]` + dynamic `[user]` messages
 - Includes a minimal floating panel UI and demo page
 
 ## Project structure
 
-- `src/core/Agent.ts` — main agent loop
+- `src/core/Agent.ts` — main agent loop (two-phase and single-phase)
 - `src/core/tools.ts` — action validation/normalization
-- `src/core/prompt.ts` — prompt construction
+- `src/core/prompt.ts` — prompt construction (imports from `.md` files)
+- `src/core/prompts/` — static Markdown system prompts
 - `src/core/types.ts` — shared TypeScript types
 - `src/page-controller/PageController.ts` — page observation/action executor bridge
 - `src/page-controller/domScanner.ts` — DOM scanning + indexed text rendering
 - `src/page-controller/actions.ts` — DOM action implementations
-- `src/llm/OpenAIClient.ts` — universal OpenAI-compatible `fetch` client + JSON parsing
+- `src/llm/OpenAIClient.ts` — universal OpenAI-compatible `fetch` client with tool calling
 - `src/llm/createLLMClient.ts` — client factory
 - `src/ui/Panel.ts` — floating UI panel
 - `src/index.ts` — public API exports
@@ -140,24 +142,25 @@ When `sections` are declared, the agent can resolve a cross-page request such as
 
 ## Action contract
 
-The LLM should return JSON like:
+The agent uses **OpenAI tool calling** — each action is defined as a tool with typed parameters. For models that don't support tool calls, JSON-in-content format is also supported.
 
-```json
-{
-  "thought": "I should fill the name field first",
-  "action": "input",
-  "args": { "index": 1, "text": "Alice" }
-}
-```
+Tool-calling response fields include optional **reflection** parameters:
+- `evaluation_previous_goal` — did the last action succeed?
+- `memory` — key facts to remember for future steps
+- `next_goal` — what to do next and why
 
 Supported actions:
 
 - `click` — `{ index }`
 - `input` — `{ index, text }`
-- `select` — `{ index, value }` or `{ index, text }`
-- `scroll` — `{ direction: "up" | "down", amount? }`
+- `select` — `{ index, value }`
+- `scroll` — `{ direction: "up" | "down", amount? }` or `{ index }`
 - `wait` — `{ timeoutMs? }`
-- `done` — `{ result? }`
+- `navigate` — `{ url }`
+- `clear` — `{ index }`
+- `press_key` — `{ key, index? }`
+- `hover` — `{ index }`
+- `done` — `{ result }`
 
 Unknown/invalid actions fail with clear error messages.
 
